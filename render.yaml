@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: neuralgrid-derms
+    runtime: docker
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: DATABASE_URL
+        fromDatabase:
+          name: neuralgrid-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: STATIC_DIR
+        value: /app/static
+
+databases:
+  - name: neuralgrid-db
+    databaseName: neuralgrid
+    plan: free
