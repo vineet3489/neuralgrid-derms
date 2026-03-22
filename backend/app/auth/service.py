@@ -4,8 +4,8 @@ import uuid
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import bcrypt as _bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -16,22 +16,23 @@ from app.auth.models import Deployment, User, UserDeploymentRole
 from app.auth.schemas import Role, TokenData
 
 # ---------------------------------------------------------------------------
-# Password hashing
+# Password hashing — using bcrypt directly (avoids passlib/bcrypt compat issues)
 # ---------------------------------------------------------------------------
-
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 _http_bearer = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
     """Hash a plain-text password using bcrypt."""
-    return _pwd_context.hash(password)
+    return _bcrypt.hashpw(password.encode("utf-8"), _bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     """Return True if the plain password matches the hash."""
-    return _pwd_context.verify(plain, hashed)
+    try:
+        return _bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------

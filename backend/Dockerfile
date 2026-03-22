@@ -4,7 +4,8 @@ WORKDIR /app
 
 # Install dependencies first (better layer caching)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# asyncpg needed for PostgreSQL on Render (not needed for local SQLite dev)
+RUN pip install --no-cache-dir -r requirements.txt asyncpg>=0.29.0
 
 # Copy application source
 COPY . .
