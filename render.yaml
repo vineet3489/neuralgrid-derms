@@ -5,14 +5,13 @@ databases:
     plan: free
 
 services:
-  # ── Backend (FastAPI) ──────────────────────────────────────────────────────
+  # ── Backend (FastAPI via Docker) ───────────────────────────────────────────
   - type: web
     name: neuralgrid-backend
     plan: free
-    runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
@@ -22,7 +21,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: ALLOWED_ORIGINS
-        value: https://neuralgrid.vercel.app
+        value: https://neuralgrid-frontend.onrender.com
       - key: STATIC_DIR
         value: ""
       - key: PYTHONUNBUFFERED
