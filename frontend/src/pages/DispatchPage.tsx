@@ -515,7 +515,7 @@ export default function DispatchPage() {
                     <td className="table-cell text-xs text-gray-400">
                       <div className="flex items-center gap-1">
                         {event.auto_generated && (
-                          <Zap className="w-3 h-3 text-amber-400" title="Auto-generated" />
+                          <Zap className="w-3 h-3 text-amber-400" />
                         )}
                         {event.trigger}
                       </div>
