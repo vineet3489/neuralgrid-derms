@@ -93,4 +93,12 @@ async def init_db() -> None:
             pass
 
     async with engine.begin() as conn:
+        # Drop stale FK constraints that were created in earlier deploys.
+        # These are no-ops if the constraints don't exist (IF EXISTS).
+        is_pg = not fix_db_url(settings.database_url).startswith("sqlite")
+        if is_pg:
+            from sqlalchemy import text
+            await conn.execute(text(
+                "ALTER TABLE audit_events DROP CONSTRAINT IF EXISTS audit_events_user_id_fkey"
+            ))
         await conn.run_sync(Base.metadata.create_all)
