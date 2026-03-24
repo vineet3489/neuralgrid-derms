@@ -817,9 +817,8 @@ async def get_cim_dispatch(
     """
     try:
         from app.dispatch.models import FlexEvent, OEMessage
-        from app.assets.models import DERAsset
-        from app.aggregator.cim.iec62746_4 import build_der_group_dispatch
-        from app.aggregator.kafka_transport import publish_oe_dispatch
+        from app.aggregator.cim.iec62746_4 import build_operating_envelope
+        from app.aggregator.kafka_transport import publish_operating_envelope
 
         event_result = await db.execute(
             select(FlexEvent).where(
@@ -836,46 +835,42 @@ async def get_cim_dispatch(
         )
         oe_messages = oe_result.scalars().all()
 
-        der_targets: List[dict] = []
-        for m in oe_messages:
-            asset_ref = m.asset_id
-            try:
-                asset_res = await db.execute(
-                    select(DERAsset).where(DERAsset.id == m.asset_id)
-                )
-                asset = asset_res.scalar_one_or_none()
-                if asset:
-                    asset_ref = asset.asset_ref
-            except Exception:
-                pass
-
-            allocated_kw = m.export_max_kw or m.import_max_kw or 0.0
-            der_targets.append(
-                {"asset_ref": asset_ref, "allocated_kw": allocated_kw}
-            )
-
-        target_kw = event.target_kw
         start_iso = event.start_time.isoformat() if event.start_time else datetime.now(timezone.utc).isoformat()
         end_iso = event.end_time.isoformat() if event.end_time else start_iso
 
-        dispatch_type = "CURTAIL"
-        if event.event_type in ("PEAK_REDUCTION", "DR_CURTAILMENT", "VOLTAGE_CORRECTION"):
-            dispatch_type = "CURTAIL"
-        elif event.event_type == "P2P_DISPATCH":
-            dispatch_type = "DISCHARGE"
+        # Build 30-min slots from OE messages (or single slot from event)
+        slots = []
+        if oe_messages:
+            for m in oe_messages:
+                slots.append({
+                    "slot_start": start_iso,
+                    "slot_end": end_iso,
+                    "export_max_kw": m.export_max_kw or 0.0,
+                    "import_max_kw": m.import_max_kw or 0.0,
+                })
+        else:
+            slots = [{
+                "slot_start": start_iso,
+                "slot_end": end_iso,
+                "export_max_kw": event.target_kw or 0.0,
+                "import_max_kw": 0.0,
+            }]
 
-        doc = build_der_group_dispatch(
-            group_id=event.cmz_id,
-            dispatch_type=dispatch_type,
-            target_power_kw=target_kw,
-            start_time=start_iso,
-            end_time=end_iso,
-            der_targets=der_targets,
+        # DSO/SPG EIC codes — use deployment slug as EIC placeholder
+        dso_eic = f"NEURALGRID-{deployment_id.upper()}"[:16]
+        spg_eic = f"SPG-{event.cmz_id}"[:16]
+
+        doc = build_operating_envelope(
+            cmz_id=event.cmz_id,
+            slots=slots,
+            dso_eic=dso_eic,
+            spg_eic=spg_eic,
             deployment_id=deployment_id,
+            correlation_id=event.event_ref,
         )
 
-        # Publish to Kafka if enabled (non-blocking; failure is logged but not raised)
-        await publish_oe_dispatch(deployment_id, event.cmz_id, doc)
+        # Publish to D4G Kafka topic dso_operating_envelope (non-blocking)
+        await publish_operating_envelope(deployment_id, event.cmz_id, doc)
 
         return doc
     except HTTPException:
@@ -1017,6 +1012,40 @@ async def submit_reserve_bid(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.post("/cim/flex-offer", status_code=202)
+async def receive_flex_offer(
+    body: dict,
+    db: DBDep,
+    deployment_id: DeploymentDep,
+) -> dict:
+    """
+    POST /api/v1/aggregator/cim/flex-offer
+
+    Receive a D4G FlexOfferMessage (IEC 62746-4) from an SPG/aggregator.
+    Document key: ReferenceEnergyCurveFlexOffer_MarketDocument.
+
+    Also consumed from Kafka topic ``flex-offers`` by the background consumer.
+
+    Returns: {accepted, mrid, cmz_id, slot_count}
+    """
+    try:
+        from app.aggregator.cim.iec62746_4 import parse_flex_offer
+
+        parsed = parse_flex_offer(body)
+        return {
+            "accepted": True,
+            "mrid": parsed["mrid"],
+            "cmz_id": parsed["cmz_id"],
+            "spg_eic": parsed["spg_eic"],
+            "slot_count": len(parsed["slots"]),
+            "correlation_id": parsed.get("correlation_id"),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/cim/protocols")
 async def list_cim_protocols(
     deployment_id: DeploymentDep,
@@ -1050,41 +1079,45 @@ async def list_cim_protocols(
             ),
         },
         {
-            "name": "DERGroupDispatch",
-            "standard": "IEC 62746-4",
-            "transport": "REST / Kafka (derms.oe.dispatch)",
+            "name": "OperatingEnvelope",
+            "standard": "IEC 62746-4 / D4G",
+            "transport": "REST / Kafka (dso_operating_envelope)",
             "description": (
-                "Fleet-level dispatch command from DERMS to aggregator. "
-                "Specifies per-asset allocated kW targets. "
-                "Retrieve via GET /api/v1/aggregator/cim/dispatch/{event_id}."
+                "DSO/DERMS sends operating envelope (export/import limits per CMZ) "
+                "to aggregators/SPGs. Document: ReferenceEnergyCurveOperatingEnvelope_MarketDocument. "
+                "Retrieve via GET /api/v1/aggregator/cim/dispatch/{event_id}. "
+                "Published to Kafka topic dso_operating_envelope. Units: MAW."
             ),
         },
         {
-            "name": "DERCapabilityInfo",
-            "standard": "IEC 62746-4",
-            "transport": "REST",
+            "name": "FlexOffer",
+            "standard": "IEC 62746-4 / D4G",
+            "transport": "REST / Kafka (flex-offers)",
             "description": (
-                "Aggregator declares fleet capabilities (rated kW, kVA, flex eligibility) "
-                "to the DERMS. Submit via POST /api/v1/aggregator/cim/capability."
+                "SPG/aggregator submits available flexibility volume to DSO. "
+                "Document: ReferenceEnergyCurveFlexOffer_MarketDocument. "
+                "Submit via POST /api/v1/aggregator/cim/flex-offer. "
+                "Consumed from Kafka topic flex-offers. Units: MAW."
             ),
         },
         {
-            "name": "DERGroupStatus",
-            "standard": "IEC 62746-4",
-            "transport": "REST / Kafka (derms.aggregator.telemetry)",
+            "name": "BaselineNotification",
+            "standard": "IEC 62746-4 / D4G",
+            "transport": "Kafka (baseline_24h)",
             "description": (
-                "Aggregator reports per-asset operational state (power_kw, SoC, opState) "
-                "to the DERMS. Submit via POST /api/v1/aggregator/cim/status."
+                "DSO notifies SPG of expected baseline 24 h ahead. "
+                "Document: ReferenceEnergyCurveBaselineNotification_MarketDocument. "
+                "Published to Kafka topic baseline_24h. Units: MAW."
             ),
         },
         {
-            "name": "DERMonitoringInfo",
-            "standard": "IEC 62746-4",
-            "transport": "Kafka (derms.aggregator.telemetry)",
+            "name": "HistoricalData",
+            "standard": "IEC 62746-4 / D4G",
+            "transport": "Kafka (historical_data)",
             "description": (
-                "High-frequency asset telemetry (power_kw, voltage_v, current_a) "
-                "streamed from aggregator to DERMS via Kafka topic "
-                "derms.aggregator.telemetry."
+                "DSO sends historical measurement data to SPG. "
+                "Document: ReferenceEnergyCurveHistoricalData_MarketDocument. "
+                "Published to Kafka topic historical_data. Units: MAW."
             ),
         },
         {

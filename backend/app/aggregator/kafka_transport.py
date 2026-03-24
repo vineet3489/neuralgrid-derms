@@ -1,10 +1,11 @@
 """
 Kafka transport for DER aggregator messages.
 
-Topics:
-  derms.oe.dispatch          — DERMS publishes OE limits + DERGroupDispatch to aggregators
-  derms.flex.events          — DERMS publishes flex events when dispatched
-  derms.aggregator.telemetry — aggregators publish DERGroupStatus / DERMonitoringInfo
+Topics (D4G IEC 62746-4 spec):
+  dso_operating_envelope     — DERMS/DSO publishes OE to aggregators/SPGs
+  flex-offers                — Aggregators/SPGs publish flex offers to DSO
+  baseline_24h               — DERMS/DSO publishes 24-h baseline to SPGs
+  historical_data            — DERMS/DSO publishes historical measurements to SPGs
 
 Enabled only when KAFKA_BOOTSTRAP_SERVERS is set in config/environment.
 Falls back silently to REST-only mode when Kafka is not configured.
@@ -38,9 +39,15 @@ except ImportError:
 # Topic constants
 # ---------------------------------------------------------------------------
 
-TOPIC_OE_DISPATCH = "derms.oe.dispatch"
-TOPIC_FLEX_EVENTS = "derms.flex.events"
-TOPIC_AGG_TELEMETRY = "derms.aggregator.telemetry"
+# D4G IEC 62746-4 spec topic names
+TOPIC_OE_DISPATCH   = "dso_operating_envelope"   # DSO → SPG: operating envelopes
+TOPIC_FLEX_OFFERS   = "flex-offers"               # SPG → DSO: flex offer bids
+TOPIC_BASELINE      = "baseline_24h"              # DSO → SPG: 24-h baseline
+TOPIC_HISTORICAL    = "historical_data"            # DSO → SPG: historical measurements
+
+# Legacy aliases kept for internal callers
+TOPIC_FLEX_EVENTS   = TOPIC_FLEX_OFFERS
+TOPIC_AGG_TELEMETRY = TOPIC_FLEX_OFFERS
 
 
 # ---------------------------------------------------------------------------
@@ -107,38 +114,43 @@ async def _publish(topic: str, deployment_id: str, routing_key: str, message: di
             pass
 
 
-async def publish_oe_dispatch(deployment_id: str, cmz_id: str, message: dict) -> bool:
+async def publish_operating_envelope(deployment_id: str, cmz_id: str, message: dict) -> bool:
     """
-    Publish a DERGroupDispatch / OE limit update to Kafka.
+    Publish a D4G OperatingEnvelopeMessage to Kafka topic ``dso_operating_envelope``.
 
     Parameters
     ----------
-    deployment_id : Platform deployment slug (used as routing prefix).
-    cmz_id        : Constraint Managed Zone identifier (used as message key).
-    message       : DERGroupDispatch or OE dict to publish.
-
-    Returns
-    -------
-    True if the message was sent, False if Kafka is disabled or the send failed.
+    deployment_id : Platform deployment slug (routing prefix).
+    cmz_id        : CMZ identifier (message key).
+    message       : OperatingEnvelopeMessage dict from build_operating_envelope().
     """
     return await _publish(TOPIC_OE_DISPATCH, deployment_id, cmz_id, message)
 
 
+# Legacy alias
+publish_oe_dispatch = publish_operating_envelope
+
+
+async def publish_baseline(deployment_id: str, cmz_id: str, message: dict) -> bool:
+    """
+    Publish a D4G BaselineNotificationMessage to Kafka topic ``baseline_24h``.
+    """
+    return await _publish(TOPIC_BASELINE, deployment_id, cmz_id, message)
+
+
+async def publish_historical_data(deployment_id: str, cmz_id: str, message: dict) -> bool:
+    """
+    Publish a D4G HistoricalDataMessage to Kafka topic ``historical_data``.
+    """
+    return await _publish(TOPIC_HISTORICAL, deployment_id, cmz_id, message)
+
+
 async def publish_flex_event(deployment_id: str, event_ref: str, message: dict) -> bool:
     """
-    Publish a flex event activation to Kafka.
-
-    Parameters
-    ----------
-    deployment_id : Platform deployment slug.
-    event_ref     : Platform event reference (e.g. "EVT-042").
-    message       : Activation or flex-event dict to publish.
-
-    Returns
-    -------
-    True if the message was sent, False if Kafka is disabled or the send failed.
+    Publish a flex offer / activation to Kafka topic ``flex-offers``.
+    (Legacy name kept for compatibility with existing callers.)
     """
-    return await _publish(TOPIC_FLEX_EVENTS, deployment_id, event_ref, message)
+    return await _publish(TOPIC_FLEX_OFFERS, deployment_id, event_ref, message)
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +186,7 @@ async def start_telemetry_consumer(
 
     try:
         consumer = AIOKafkaConsumer(
-            TOPIC_AGG_TELEMETRY,
+            TOPIC_FLEX_OFFERS,
             bootstrap_servers=settings.kafka_bootstrap_servers,
             security_protocol=getattr(settings, "kafka_security_protocol", "PLAINTEXT"),
             group_id=group_id,
@@ -183,7 +195,8 @@ async def start_telemetry_consumer(
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         )
         await consumer.start()
-        logger.info("Kafka telemetry consumer started (deployment=%s)", deployment_id)
+        logger.info("Kafka flex-offers consumer started (deployment=%s, topic=%s)",
+                    deployment_id, TOPIC_FLEX_OFFERS)
 
         async for msg in consumer:
             try:
