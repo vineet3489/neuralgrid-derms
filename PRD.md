@@ -1053,129 +1053,166 @@ POST /settlement/{id}/approve
 
 ## 16. CIM-Based DER Aggregator Exchange
 
-> **v1.1 addition.** Adds structured CIM message exchange with DER aggregators using IEC 62325-301 (flex market) and IEC 62746-4 (direct DERMS interface), with Kafka as the async transport layer.
+> **v1.1 addition; v1.2 updated** to align with the **Digital4Grids (D4G) IEC 62746-4 messaging profile** (AsyncAPI v1.0.0 / OpenAPI v2.0.0). The implementation follows the exact D4G `ReferenceEnergyCurve*_MarketDocument` format and Kafka topic names from the D4G specification.
 
 ### 16.1 Why CIM Over Proprietary Formats?
 
-The existing aggregator interface (IEEE 2030.5 + OpenADR) is device-centric — it manages individual DER assets. For large aggregators managing hundreds of assets as a portfolio, the industry is moving toward **fleet-level CIM exchange**:
+The existing aggregator interface (IEEE 2030.5 + OpenADR) is device-centric. For large aggregators managing portfolios as a group (Service Providing Groups / SPGs), the industry is moving to **fleet-level CIM market document exchange**:
 
 | Approach | Granularity | Standard | Use case |
 |---|---|---|---|
 | IEEE 2030.5 | Per device (DERControl, DERStatus) | IEEE 2030.5-2018 | Smart inverters, residential DERs |
 | OpenADR 2.0b | Per event (EiEvent, EiReport) | OASIS OpenADR | Demand response programs |
-| **IEC 62325-301** | **Per market bid (ReserveBidMarketDocument)** | **IEC 62325-301** | **Flex market exchange, DNO-aggregator** |
-| **IEC 62746-4** | **Per fleet (DERGroupDispatch, DERGroupStatus)** | **IEC 62746-4** | **Direct DERMS-aggregator interface** |
+| **IEC 62325-301** | **Per market bid (ReserveBidMarketDocument)** | **IEC 62325-301** | **Flex market bids, DNO-TSO exchange** |
+| **IEC 62746-4 / D4G** | **Per CMZ (ReferenceEnergyCurve*_MarketDocument)** | **IEC 62746-4 + D4G profile** | **DSO-SPG operating envelopes and flex offers** |
 
-### 16.2 IEC 62325-301 — Flex Market Exchange
+**SPG (Service Providing Group)**: the aggregator entity in the D4G model — a legal entity that aggregates DER assets and exchanges flex with the DSO.
 
-Used for structured bid/offer exchange between aggregators and the DNO/market operator. Builds on the same IEC CIM MarketDocument foundations as the SSEN IEC OE messages (§15).
+### 16.2 D4G IEC 62746-4 — Message Format
 
-**Message flow:**
+All four document types share the same top-level structure:
 
-```
-Neural Grid DERMS                    DER Aggregator
-      │                                    │
-      │── GET /aggregator/cim/bid/{cmz} ──▶│  Template: ReserveBidMarketDocument
-      │◀── POST /aggregator/cim/bid ───────│  Filled bid: quantities + prices
-      │    {                               │
-      │      type: "A26",                  │
-      │      process.processType: "Z02",   │
-      │      constraintZone.mRID: "OE-...",│  ← must match active OE mRID
-      │      TimeSeries[]: [{              │
-      │        flowDirection: Increase,    │
-      │        measureUnit: MAW,           │
-      │        Period.Point[]: [{          │
-      │          position, quantity_mw,    │
-      │          price_per_mwh}]}]         │
-      │    }                               │
-      │── ActivationDocument ─────────────▶│  Activates the accepted bid
-      │    {type: "A53",                   │
-      │     requestedQuantity.quantity: MW}│
-```
-
-**Key structural rules:**
-- All quantities in **MW** (`"MAW"`) — consistent with SSEN IEC OE format
-- `constraintZone.mRID` in bid must match the active OE document's `mRID`
-- `process.processType: "Z02"` (Reserve Bid; OE uses Z01)
-
-### 16.3 IEC 62746-4 — Direct DERMS-Aggregator Interface
-
-Fleet-level dispatch and status. Aggregators expose their portfolio as a group.
-
-**DERGroupDispatch (DERMS → Aggregator):**
 ```json
 {
-  "DERGroupDispatch": {
-    "groupID": "ALPHA-FLEX-FLEET-001",
-    "dispatchType": "CURTAIL",
-    "targetPower_kW": 500.0,
-    "startTime": "2026-03-24T14:00:00Z",
-    "endTime": "2026-03-24T14:30:00Z",
-    "DERTargets": [
-      {"assetRef": "PV-001", "allocatedPower_kW": 150.0},
-      {"assetRef": "BESS-002", "allocatedPower_kW": 200.0},
-      {"assetRef": "EV-003", "allocatedPower_kW": 150.0}
-    ]
+  "MessageDocumentHeader": {
+    "messageId": "550e8400-e29b-41d4-a716-446655440000",
+    "messageType": "OperatingEnvelope",
+    "timestamp": "2026-03-24T14:00:00Z",
+    "version": "1.0",
+    "source": "NeuralGrid-DERMS",
+    "correlationId": "EVT-042"
+  },
+  "ReferenceEnergyCurveOperatingEnvelope_MarketDocument": {
+    "mRID": "OE-SSEN-A1B2C3D4E5F6",
+    "revisionNumber": "1",
+    "type": "A26",
+    "createdDateTime": "2026-03-24T14:00:00Z",
+    "Sender_MarketParticipant": {
+      "MarketParticipant.mRID": { "value": "NEURALGRID-SSEN", "codingScheme": "A01" },
+      "MarketParticipant.MarketRole": { "type": "Z01" }
+    },
+    "Receiver_MarketParticipant": {
+      "MarketParticipant.mRID": { "value": "SPG-CMZ-001", "codingScheme": "A01" },
+      "MarketParticipant.MarketRole": { "type": "Z02" }
+    },
+    "Process": { "processType": "A01" },
+    "Period": { "timeInterval": { "start": "...", "end": "..." } },
+    "Series": [{
+      "curveType": "A01",
+      "RegisteredResource": {
+        "RegisteredResource.mRID": { "value": "CMZ-001", "codingScheme": "A01" }
+      },
+      "FlowDirection": { "direction": "A01" },
+      "ResourceTimeSeries": { "value1ScheduleType": "generation" },
+      "Series": [{
+        "Measurement_Unit": { "name": "MAW" },
+        "Period": [{
+          "resolution": "PT30M",
+          "timeInterval": { "start": "...", "end": "..." },
+          "Point": [{ "position": 1, "Max_Quantity": { "quantity": 0.075, "quality": "A06" } }]
+        }]
+      }]
+    }]
   }
 }
 ```
 
-**DERGroupStatus (Aggregator → DERMS):**
-```json
-{
-  "DERGroupStatus": {
-    "groupID": "ALPHA-FLEX-FLEET-001",
-    "reportTime": "2026-03-24T14:05:00Z",
-    "DERStatus": [
-      {"assetRef": "PV-001", "currentPower_kW": 148.5, "operatingState": "CURTAILED"},
-      {"assetRef": "BESS-002", "currentPower_kW": 198.0, "soc_pct": 72.3, "operatingState": "DISCHARGING"}
-    ]
-  }
-}
+**Key field definitions:**
+- `codingScheme: "A01"` = EIC (Energy Identification Coding Scheme, ENTSO-E)
+- `MarketRole.type: "Z01"` = DSO/DERMS; `"Z02"` = SPG/Aggregator
+- `processType: "A01"` = Day-ahead; `"A16"` = Realised (historical)
+- `FlowDirection.direction`: `"A01"` = UP (export/generation); `"A02"` = DOWN (import/curtailment)
+- `Measurement_Unit.name: "MAW"` = megawatt — **all quantities in MW, not kW**
+- `quality: "A06"` = Calculated; `"A04"` = As provided
+- `resolution: "PT30M"` = 30-minute slots (ISO 8601 duration)
+
+### 16.3 Four Document Types
+
+| Document | Direction | Kafka Topic | messageType | Point field |
+|---|---|---|---|---|
+| `ReferenceEnergyCurveOperatingEnvelope_MarketDocument` | DSO → SPG | `dso_operating_envelope` | `OperatingEnvelope` | `Max_Quantity` |
+| `ReferenceEnergyCurveFlexOffer_MarketDocument` | SPG → DSO | `flex-offers` | `FlexOffer` | `Quantity` |
+| `ReferenceEnergyCurveBaselineNotification_MarketDocument` | DSO → SPG | `baseline_24h` | `BaselineNotification` | `Baseline_Quantity` |
+| `ReferenceEnergyCurveHistoricalData_MarketDocument` | DSO → SPG | `historical_data` | `HistoricalData` | `Historical_Quantity` |
+
+**OperatingEnvelope**: DSO tells SPG the maximum export and import limits at each CMZ for each 30-min slot. Two Series per document — one UP (export ceiling) and one DOWN (import ceiling).
+
+**FlexOffer**: SPG tells DSO how much flexibility is available (up/down, in MW) for each slot. The DSO uses this to plan activations.
+
+**BaselineNotification**: DSO sends the SPG the expected baseline consumption/generation for the next 24 hours. SPG uses this to size their flex offer relative to baseline.
+
+**HistoricalData**: DSO sends actual measured data back to the SPG (for settlement reconciliation and model calibration).
+
+### 16.4 Message Flow
+
+```
+Neural Grid DERMS (DSO)                     SPG / Aggregator
+        |                                          |
+        |-- OperatingEnvelope ----------------->   |  Kafka: dso_operating_envelope
+        |   ReferenceEnergyCurveOperatingEnvelope  |  48 x 30-min slots, in MAW
+        |   (export_max + import_max per slot)     |
+        |                                          |
+        |-- BaselineNotification --------------->  |  Kafka: baseline_24h
+        |   Expected baseline for next 24h         |
+        |                                          |
+        |<- FlexOffer ---------------------------  |  Kafka: flex-offers / REST POST
+        |   Available flex up/down per slot (MAW)  |
+        |                                          |
+        |-- Activation (IEC 62325 A53) --------->  |  REST: triggered by flex event
+        |   Accepted quantity + event ref          |
+        |                                          |
+        |<- HistoricalData (post-event) ---------  |  Kafka: historical_data
 ```
 
-**DERCapabilityInfo (Registration):**
-```json
-{
-  "DERCapabilityInfo": {
-    "groupID": "ALPHA-FLEX-FLEET-001",
-    "aggregatorRef": "ALPHA-FLEX",
-    "assets": [
-      {"assetRef": "PV-001", "type": "SOLAR_PV", "rated_kW": 200.0, "flex_eligible": true},
-      {"assetRef": "BESS-002", "type": "BESS", "rated_kW": 250.0, "flex_eligible": true}
-    ]
-  }
-}
-```
+### 16.5 Kafka Transport
 
-### 16.4 Kafka Transport
-
-| Topic | Direction | Format | Purpose |
+| Topic | Direction | Document Type | Purpose |
 |---|---|---|---|
-| `derms.oe.dispatch` | DERMS → Aggregators | IEC 62746-4 DERGroupDispatch | OE limits + fleet dispatch |
-| `derms.flex.events` | DERMS → Aggregators | IEC 62325 ActivationDocument | Event activation |
-| `derms.aggregator.telemetry` | Aggregators → DERMS | IEC 62746-4 DERGroupStatus | Fleet telemetry ingest |
+| `dso_operating_envelope` | DSO -> SPG | OperatingEnvelope | OE limits per CMZ, every 30 min |
+| `flex-offers` | SPG -> DSO | FlexOffer | Aggregator flex availability |
+| `baseline_24h` | DSO -> SPG | BaselineNotification | 24-h baseline ahead |
+| `historical_data` | DSO -> SPG | HistoricalData | Post-event actuals for settlement |
 
-Kafka is enabled via `KAFKA_BOOTSTRAP_SERVERS` environment variable. When empty, platform operates REST-only — no code paths break. Library: `aiokafka` (async, compatible with FastAPI event loop).
+Kafka is optional — disabled when `KAFKA_BOOTSTRAP_SERVERS` is empty. Library: `aiokafka`. All paths degrade gracefully to REST-only.
 
-### 16.5 CIM API Endpoints
+### 16.6 CIM API Endpoints
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/aggregator/cim/capability` | Register fleet (DERCapabilityInfo) |
-| `POST` | `/api/v1/aggregator/cim/status` | Report fleet status (DERGroupStatus) |
-| `GET` | `/api/v1/aggregator/cim/dispatch/{event_id}` | Fetch DERGroupDispatch for event |
-| `GET` | `/api/v1/aggregator/cim/bid/{cmz_id}` | Get ReserveBid template |
-| `POST` | `/api/v1/aggregator/cim/bid` | Submit reserve bid |
-| `GET` | `/api/v1/aggregator/cim/protocols` | List supported protocols |
+| `GET` | `/api/v1/aggregator/cim/dispatch/{event_id}` | Build + publish OperatingEnvelopeMessage for event |
+| `POST` | `/api/v1/aggregator/cim/flex-offer` | Receive FlexOfferMessage from SPG |
+| `POST` | `/api/v1/aggregator/cim/capability` | Register SPG fleet (asset catalogue) |
+| `POST` | `/api/v1/aggregator/cim/status` | Receive fleet telemetry from SPG |
+| `GET` | `/api/v1/aggregator/cim/bid/{cmz_id}` | Get IEC 62325 ReserveBid template |
+| `POST` | `/api/v1/aggregator/cim/bid` | Submit IEC 62325 ReserveBid |
+| `GET` | `/api/v1/aggregator/cim/protocols` | List supported protocols + topics |
+
+### 16.7 Esoteric Terms Explained
+
+**EIC (Energy Identification Coding Scheme)**: A 16-character alphanumeric code maintained by ENTSO-E that uniquely identifies any party in the European electricity market — DSOs, TSOs, aggregators, market participants. Think of it as an IBAN for energy actors. `codingScheme: "A01"` in CIM documents always means EIC.
+
+**MAW (Megawatt)**: The UN/CEFACT unit code for megawatt in CIM market documents. All power quantities in IEC 62325 / IEC 62746-4 documents are in MAW, not kW. The platform converts internally: `maw = kw / 1000`.
+
+**SPG (Service Providing Group)**: The D4G term for an aggregator or portfolio manager — an entity that pools DER assets and exchanges flexibility offers with the DSO. Equivalent to a VEN in OpenADR, or a Balance Responsible Party in wholesale markets.
+
+**CMZ (Constraint Management Zone)**: A geographic zone of the distribution network defined by a thermal or voltage constraint. OE limits are issued per CMZ, not per asset. A CMZ typically corresponds to a 11kV feeder section downstream of a primary substation.
+
+**mRID (Master Resource Identifier)**: The CIM identifier for any object — documents, market participants, grid nodes. In IEC 62325/62746-4, `mRID` is typically a UUID or structured string (e.g., `OE-SSEN-A1B2C3`). In CIM XML, it maps to the `rdf:about` attribute.
+
+**curveType "A01"**: In IEC 62325, `"A01"` means a sequential fixed-size time series (constant-resolution slots). Other values: `"A02"` = point, `"A03"` = variable resolution. Almost all OE/flex documents use `"A01"`.
+
+**processType**: Classifies what the document is about. Key values: `"A01"` = day-ahead, `"A14"` = forecast, `"A16"` = realised, `"A40"` = intraday. The D4G OE documents use `"A01"` (day-ahead, 48-slot horizon).
+
+**revisionNumber**: Monotonically increasing integer (`"1"`, `"2"`, ...) on the same `mRID`. If the DSO reissues an OE document for the same CMZ and period, they increment `revisionNumber`. Receivers always use the highest revision.
+
+**FCA (Flexibility Contracting and Activation)**: The D4G use-case label for the full workflow — from capability registration through to OE publication, flex offers, activation, and settlement. The four D4G document types implement FCA between DSO and SPG.
 
 **References:**
+- D4G AsyncAPI spec: `d4g-iec62746_4_messages-_asyncapi.yaml` (v1.0.0)
+- D4G OpenAPI spec: `d4g-iec62746_4_messages-swagger.yml` (v2.0.0)
 - IEC 62325-301 (Electricity market comms): https://www.iec.ch/62325
 - IEC 62746-4 (DERMS-DER interface): https://www.iec.ch/62746-4
-- aiokafka: https://aiokafka.readthedocs.io
-
----
-
+- Digital4Grids schema repo: https://github.com/Digital4Grids/Bridge_energy_schemas/tree/main/IEC62746-4
 ## 17. SCADA Gateway & DaaS
 
 ### 17.1 Architecture

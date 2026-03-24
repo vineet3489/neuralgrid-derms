@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional
 import uuid
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, JSON, String
+from sqlalchemy import Boolean, DateTime, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,12 +27,8 @@ class AuditEvent(Base):
     __tablename__ = "audit_events"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
-    user_id: Mapped[Optional[str]] = mapped_column(
-        String(36),
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
+    # Plain varchar — no FK so system/background processes can log without a real user row
+    user_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     # Denormalized for easy log reading without joins
     user_email: Mapped[str] = mapped_column(String(255), nullable=False, default="system")
     user_role: Mapped[str] = mapped_column(String(64), nullable=False, default="SYSTEM")
