@@ -451,27 +451,38 @@ async def seed_integration_configs(db: AsyncSession) -> None:
     ]
 
     existing_result = await db.execute(select(IntegrationConfig))
-    existing = {
-        (c.deployment_id, c.integration_type)
+    existing_map = {
+        (c.deployment_id, c.integration_type): c
         for c in existing_result.scalars().all()
     }
 
     for dep, itype, name, desc, base_url in DEFAULTS:
-        if (dep, itype) in existing:
-            continue
-        cfg = IntegrationConfig(
-            id=str(uuid.uuid4()),
-            deployment_id=dep,
-            integration_type=itype,
-            name=name,
-            description=desc,
-            mode="SIMULATION",
-            base_url=base_url,
-            is_active=True,
-            sim_params=json.dumps(DEFAULT_SIM_PARAMS.get(itype, {})),
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
-        )
-        db.add(cfg)
+        existing = existing_map.get((dep, itype))
+        if existing is not None:
+            # Upsert: keep user-edited mode/auth but refresh name, description,
+            # and base_url (so new sample endpoints appear without a DB wipe).
+            existing.name = name
+            existing.description = desc
+            if not existing.base_url:   # only set if blank — don't clobber real URLs
+                existing.base_url = base_url
+            existing.updated_at = datetime.now(timezone.utc)
+            # Add HISTORIAN sim_params if missing
+            if not existing.sim_params or existing.sim_params == '{}':
+                existing.sim_params = json.dumps(DEFAULT_SIM_PARAMS.get(itype, {}))
+        else:
+            cfg = IntegrationConfig(
+                id=str(uuid.uuid4()),
+                deployment_id=dep,
+                integration_type=itype,
+                name=name,
+                description=desc,
+                mode="SIMULATION",
+                base_url=base_url,
+                is_active=True,
+                sim_params=json.dumps(DEFAULT_SIM_PARAMS.get(itype, {})),
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            db.add(cfg)
 
     await db.flush()
