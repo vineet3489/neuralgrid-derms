@@ -108,12 +108,46 @@ function ForecastChart({ data, color, gradientId, title, height = 200 }: Forecas
   )
 }
 
+// Available forecast models — only Bell Curve (internal) is active;
+// others are placeholders for future integration.
+const FORECAST_MODELS = [
+  {
+    id: 'bell_curve',
+    label: 'Bell Curve (Internal)',
+    desc: 'Sin half-wave solar + diurnal load + EV arrival model. Runs entirely within NeuralGrid.',
+    active: true,
+    source: 'internal',
+  },
+  {
+    id: 'dms_passthrough',
+    label: 'DMS / ADMS Passthrough',
+    desc: 'Use load forecasts from connected ADMS/DMS if the integration is in LIVE mode. Falls back to Bell Curve when ADMS is in SIMULATION mode.',
+    active: false,
+    source: 'external',
+  },
+  {
+    id: 'arima',
+    label: 'ARIMA (Coming Soon)',
+    desc: 'Statistical time-series model trained on historical MDMS reads.',
+    active: false,
+    source: 'internal',
+  },
+  {
+    id: 'lstm',
+    label: 'LSTM Neural Net (Coming Soon)',
+    desc: 'Deep learning model trained on weather + meter data for higher accuracy.',
+    active: false,
+    source: 'internal',
+  },
+]
+
 export default function ForecastingPage() {
   const { forecasts, setForecasts } = useGridStore()
   const [loading, setLoading] = useState(!forecasts.solar)
   const [refreshing, setRefreshing] = useState(false)
   const [aiNarrative, setAiNarrative] = useState('')
   const [loadingAI, setLoadingAI] = useState(false)
+  const [selectedModel, setSelectedModel] = useState('bell_curve')
 
   const loadForecasts = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true)
@@ -202,6 +236,47 @@ export default function ForecastingPage() {
           <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
           Refresh Forecasts
         </button>
+      </div>
+
+      {/* Model selector */}
+      <div className="card">
+        <h2 className="text-sm font-semibold text-gray-200 mb-3">Forecast Model</h2>
+        <div className="grid grid-cols-2 gap-2">
+          {FORECAST_MODELS.map((m) => (
+            <button
+              key={m.id}
+              disabled={!m.active}
+              onClick={() => m.active && setSelectedModel(m.id)}
+              className={`text-left p-3 rounded-lg border transition-colors ${
+                m.active
+                  ? selectedModel === m.id
+                    ? 'border-indigo-500 bg-indigo-900/20'
+                    : 'border-gray-600 hover:border-gray-500'
+                  : 'border-gray-700 opacity-40 cursor-not-allowed'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                  m.active ? (selectedModel === m.id ? 'bg-indigo-400' : 'bg-gray-500') : 'bg-gray-600'
+                }`} />
+                <span className="text-xs font-medium text-gray-200">{m.label}</span>
+                <span className={`ml-auto text-xs px-1.5 py-0.5 rounded ${
+                  m.source === 'external'
+                    ? 'bg-amber-900/40 text-amber-400'
+                    : 'bg-indigo-900/40 text-indigo-400'
+                }`}>
+                  {m.source === 'external' ? 'External' : 'Internal'}
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 leading-relaxed">{m.desc}</p>
+              {m.id === 'dms_passthrough' && (
+                <p className="text-xs text-amber-400 mt-1 flex items-center gap-1">
+                  ⚠ Requires ADMS integration in LIVE mode (Integrations → GE ADMS → toggle Live)
+                </p>
+              )}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Summary strip */}

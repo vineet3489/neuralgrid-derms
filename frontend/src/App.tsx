@@ -22,6 +22,7 @@ import AdminPage from './pages/AdminPage'
 import IntegrationsPage from './pages/IntegrationsPage'
 import SCADAGatewayPage from './pages/SCADAGatewayPage'
 import GlossaryPage from './pages/GlossaryPage'
+import OperatorConsolePage from './pages/OperatorConsolePage'
 
 // ─── Error boundary — prevents a crashed page from blanking the whole app ────
 class PageErrorBoundary extends Component<
@@ -126,6 +127,7 @@ export default function App() {
         <Route path="/optimization" element={<ProtectedRoute><OptimizationPage /></ProtectedRoute>} />
         <Route path="/reports" element={<ProtectedRoute><ReportsPage /></ProtectedRoute>} />
         <Route path="/integrations" element={<ProtectedRoute><IntegrationsPage /></ProtectedRoute>} />
+        <Route path="/operator-console" element={<ProtectedRoute><OperatorConsolePage /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
         <Route path="/scada" element={<ProtectedRoute><SCADAGatewayPage /></ProtectedRoute>} />
         <Route path="/glossary" element={<ProtectedRoute><GlossaryPage /></ProtectedRoute>} />

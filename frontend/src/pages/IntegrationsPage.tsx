@@ -19,6 +19,7 @@ import {
   ChevronDown,
   MapPin,
   X,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { api } from '../api/client'
@@ -36,7 +37,7 @@ import {
 
 // ─── Local types ──────────────────────────────────────────────────────────────
 
-type IntegrationTab = 'connections' | 'oe-inspector' | 'aggregators'
+type IntegrationTab = 'connections' | 'oe-inspector' | 'aggregators' | 'sim-params'
 type IntType = 'ADMS' | 'DER_AGGREGATOR' | 'SCADA' | 'MDMS' | 'WEATHER' | 'GIS_PROVIDER'
 type AuthType = 'NONE' | 'API_KEY' | 'BASIC' | 'OAUTH2'
 type OEProtocol = 'IEEE 2030.5' | 'OpenADR 2.0b' | 'IEC 62746-4' | 'Raw'
@@ -971,9 +972,10 @@ export default function IntegrationsPage() {
   // ─── Render ─────────────────────────────────────────────────────────────────
 
   const TABS: { id: IntegrationTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-    { id: 'connections', label: 'Integration Connections', icon: Plug },
-    { id: 'oe-inspector', label: 'OE Message Inspector', icon: Radio },
-    { id: 'aggregators', label: 'Connected Aggregators', icon: Database },
+    { id: 'connections',  label: 'Integration Connections', icon: Plug             },
+    { id: 'oe-inspector', label: 'OE Message Inspector',    icon: Radio            },
+    { id: 'aggregators',  label: 'Connected Aggregators',   icon: Database         },
+    { id: 'sim-params',   label: 'Simulation Parameters',   icon: SlidersHorizontal },
   ]
 
   return (
@@ -1469,6 +1471,75 @@ export default function IntegrationsPage() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ── Simulation Parameters tab ────────────────────────────────────────── */}
+      {activeTab === 'sim-params' && (
+        <div className="space-y-4">
+          <div className="p-3 bg-indigo-900/20 border border-indigo-800/30 rounded-lg text-xs text-indigo-300 flex items-start gap-2">
+            <SlidersHorizontal className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+            <div>
+              These parameters control what the platform simulates when an integration is in <strong>SIMULATION</strong> mode.
+              When switched to <strong>LIVE</strong>, the platform reads from the real external endpoint instead.
+              Changes take effect on the next simulation cycle (every 30 s for ADMS, every 15 min for forecasts).
+            </div>
+          </div>
+
+          {integrations.length === 0 ? (
+            <div className="card text-center py-12 text-gray-500 text-sm">No integrations loaded — refresh the page.</div>
+          ) : (
+            integrations.map((intg) => {
+              let params: Record<string, any> = {}
+              try { params = JSON.parse((intg as any).sim_params || '{}') } catch {}
+              const entries = Object.entries(params)
+              if (entries.length === 0) return null
+              return (
+                <div key={intg.id} className="card">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Settings className="w-4 h-4 text-gray-400" />
+                    <h3 className="text-sm font-semibold text-gray-200">{intg.name}</h3>
+                    <span className="text-xs text-gray-500">({intg.integration_type})</span>
+                    <span className={`ml-auto text-xs px-2 py-0.5 rounded-full ${
+                      intg.mode === 'LIVE'
+                        ? 'bg-green-900/40 text-green-400'
+                        : 'bg-amber-900/40 text-amber-400'
+                    }`}>{intg.mode}</span>
+                  </div>
+                  {intg.mode === 'LIVE' && (
+                    <div className="mb-3 text-xs text-green-400 flex items-center gap-1.5">
+                      <CheckCircle className="w-3 h-3" />
+                      Live mode — using real endpoint: <span className="font-mono">{(intg as any).base_url || 'not set'}</span>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    {entries.map(([key, val]) => (
+                      <div key={key} className="bg-gray-800/50 rounded-lg p-2.5">
+                        <div className="text-xs text-gray-500 font-mono mb-0.5">{key}</div>
+                        <div className="text-xs text-gray-200 font-mono">{String(val)}</div>
+                        <div className="text-xs text-gray-600 mt-0.5">
+                          {/* human-readable hints */}
+                          {key.includes('voltage') && 'Volts'}
+                          {key.includes('factor') && '× multiplier'}
+                          {key.includes('pct') && '%'}
+                          {key.includes('interval') && 'seconds'}
+                          {key.includes('timeout') && 'seconds'}
+                          {key.includes('minutes') && 'minutes'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    className="btn-secondary text-xs mt-3 flex items-center gap-1.5"
+                    onClick={() => { setConfigTarget(intg as any); setSimOpen(true) }}
+                  >
+                    <SlidersHorizontal className="w-3 h-3" />
+                    Edit Simulation Parameters
+                  </button>
+                </div>
+              )
+            })
+          )}
         </div>
       )}
 

@@ -366,68 +366,87 @@ async def seed_integration_configs(db: AsyncSession) -> None:
     Seed default integration configs for both SSEN and PUVVNL deployments.
     Idempotent — skips any (deployment_id, integration_type) pair that already exists.
     """
+    # Tuple: (deployment_id, integration_type, name, description, sample_base_url)
     DEFAULTS = [
-        # SSEN
+        # ── SSEN South Scotland ────────────────────────────────────────────────
         (
-            "ssen",
-            "ADMS",
-            "GE ADMS (Simulated)",
-            "Simulated GE ADMS topology & SCADA state",
+            "ssen", "ADMS",
+            "GE Grid Solutions ADMS",
+            "GE ADMS topology & SCADA state — faults, switching, feeder topology",
+            "https://ge-adms-demo.ssen.co.uk/api/v2",
         ),
         (
-            "ssen",
-            "DER_AGGREGATOR_IEEE2030_5",
+            "ssen", "DER_AGGREGATOR_IEEE2030_5",
             "Alpha Flex IEEE 2030.5",
-            "Alpha Flex Ltd aggregator — IEEE 2030.5 DER server",
+            "Alpha Flex Ltd DER aggregator — IEEE 2030.5 server endpoint. "
+            "Connect your aggregator REST endpoint here to receive Operating Envelopes.",
+            "https://api.alphaflex.co.uk/2030.5/edev",
         ),
         (
-            "ssen",
-            "DER_AGGREGATOR_OPENADR",
+            "ssen", "DER_AGGREGATOR_OPENADR",
             "Alpha Flex OpenADR",
-            "Alpha Flex Ltd aggregator — OpenADR 2.0b VTN",
+            "Alpha Flex Ltd aggregator — OpenADR 2.0b VTN endpoint. "
+            "Connect your VTN server URL to receive DR events.",
+            "https://vtn.alphaflex.co.uk/OpenADR2/Simple/2.0b",
         ),
         (
-            "ssen",
-            "MDMS",
+            "ssen", "MDMS",
             "SSEN AMR/MDMS",
-            "Smart meter data ingestion — 15-min interval",
+            "Smart meter data ingestion — 15-min interval energy reads via MDMS REST API.",
+            "https://mdms-api.ssen.co.uk/api/v1",
         ),
         (
-            "ssen",
-            "WEATHER_API",
-            "Weather Forecast",
-            "Solar irradiance & wind forecast feed",
-        ),
-        # PUVVNL
-        (
-            "puvvnl",
-            "ADMS",
-            "PUVVNL DMS (Simulated)",
-            "Simulated distribution management system",
+            "ssen", "WEATHER_API",
+            "Met Office Weather Forecast",
+            "Solar irradiance & wind speed forecasts — 48 h ahead, 30-min resolution.",
+            "https://api.openweathermap.org/data/2.5/forecast",
         ),
         (
-            "puvvnl",
-            "DER_AGGREGATOR_IEEE2030_5",
+            "ssen", "HISTORIAN",
+            "ETRAA Archive (SSEN)",
+            "ETRAA historical metering archive — REST endpoint for time-series queries. "
+            "Used for settlement verification and baseline calculation. "
+            "Connect: POST /timeseries/query with {resource_id, start, end, interval}",
+            "https://api.etraa.io/v1/timeseries",
+        ),
+        # ── PUVVNL Varanasi ────────────────────────────────────────────────────
+        (
+            "puvvnl", "ADMS",
+            "PUVVNL DMS",
+            "PUVVNL distribution management system — fault alarms and feeder state.",
+            "https://dms.puvvnl.up.gov.in/api/v1",
+        ),
+        (
+            "puvvnl", "DER_AGGREGATOR_IEEE2030_5",
             "GMR AMISP IEEE 2030.5",
-            "GMR Energy Services aggregator",
+            "GMR Energy Services DER aggregator — IEEE 2030.5 endpoint. "
+            "Register your aggregator endpoint URL to receive Operating Envelopes.",
+            "https://api.gmr-amisp.in/2030.5/edev",
         ),
         (
-            "puvvnl",
-            "DER_AGGREGATOR_OPENADR",
+            "puvvnl", "DER_AGGREGATOR_OPENADR",
             "GMR AMISP OpenADR",
-            "GMR Energy Services — OpenADR 2.0b",
+            "GMR Energy Services — OpenADR 2.0b VTN server.",
+            "https://vtn.gmr-amisp.in/OpenADR2/Simple/2.0b",
         ),
         (
-            "puvvnl",
-            "MDMS",
+            "puvvnl", "MDMS",
             "GMR MDMS",
-            "GMR metering data management system",
+            "GMR metering data management system — smart meter interval reads.",
+            "https://mdms.gmr-amisp.in/api/v1",
         ),
         (
-            "puvvnl",
-            "WEATHER_API",
+            "puvvnl", "WEATHER_API",
             "IMD Weather API",
-            "India Meteorological Department solar forecast",
+            "India Meteorological Department solar irradiance forecast feed.",
+            "https://api.imd.gov.in/weather/v1/forecast",
+        ),
+        (
+            "puvvnl", "HISTORIAN",
+            "ETRAA Archive (PUVVNL)",
+            "ETRAA historical metering archive — same endpoint, filtered by deployment. "
+            "Connect: POST /timeseries/query with {resource_id, start, end, interval}",
+            "https://api.etraa.io/v1/timeseries",
         ),
     ]
 
@@ -437,7 +456,7 @@ async def seed_integration_configs(db: AsyncSession) -> None:
         for c in existing_result.scalars().all()
     }
 
-    for dep, itype, name, desc in DEFAULTS:
+    for dep, itype, name, desc, base_url in DEFAULTS:
         if (dep, itype) in existing:
             continue
         cfg = IntegrationConfig(
@@ -447,6 +466,7 @@ async def seed_integration_configs(db: AsyncSession) -> None:
             name=name,
             description=desc,
             mode="SIMULATION",
+            base_url=base_url,
             is_active=True,
             sim_params=json.dumps(DEFAULT_SIM_PARAMS.get(itype, {})),
             created_at=datetime.now(timezone.utc),

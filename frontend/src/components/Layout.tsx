@@ -19,6 +19,7 @@ import {
   Network,
   ServerCog,
   BookOpen,
+  Activity,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -33,6 +34,7 @@ const NAV_ITEMS: {
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/grid', label: 'Grid & Assets', icon: Zap },
   { path: '/dispatch', label: 'Flex Dispatch', icon: Radio },
+  { path: '/operator-console', label: 'Operator Console', icon: Activity, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },
   { path: '/programs', label: 'Programs', icon: FileText, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },
   { path: '/contracts', label: 'Contracts', icon: Shield, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },
   { path: '/counterparties', label: 'Counterparties', icon: Users, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },

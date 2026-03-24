@@ -101,6 +101,31 @@ def _kw_to_maw(kw: float) -> float:
     return round(kw / 1000.0, 6)
 
 
+def _quality_code(slot_start: str) -> str:
+    """
+    IEC 62746-4 quality code based on temporal distance from now.
+
+    A04 — Measured  (live telemetry,    ≤ 1 h ahead  — near-real-time actuals)
+    A06 — Calculated (DistFlow result,  1 – 8 h ahead — deterministic power flow)
+    A03 — Estimated  (forecast-based,   > 8 h ahead  — probabilistic)
+    """
+    try:
+        # Accept both "Z" suffix and "+00:00" aware strings
+        slot_iso = slot_start.replace("Z", "+00:00") if slot_start.endswith("Z") else slot_start
+        slot_dt = datetime.fromisoformat(slot_iso)
+        if slot_dt.tzinfo is None:
+            slot_dt = slot_dt.replace(tzinfo=timezone.utc)
+        hours_ahead = (slot_dt - datetime.now(timezone.utc)).total_seconds() / 3600.0
+    except Exception:
+        return "A06"   # fallback: calculated
+
+    if hours_ahead <= 1.0:
+        return "A04"   # Measured — within live telemetry horizon
+    if hours_ahead <= 8.0:
+        return "A06"   # Calculated — DistFlow result
+    return "A03"        # Estimated — forecast-based
+
+
 # ---------------------------------------------------------------------------
 # Operating Envelope (DSO → SPG)
 # Published on Kafka topic: dso_operating_envelope
@@ -150,7 +175,8 @@ def build_operating_envelope(
             "position": i + 1,
             "Max_Quantity": {
                 "quantity": _kw_to_maw(s.get("export_max_kw", 0.0)),
-                "quality": "A06",  # Calculated
+                # Quality per slot: A04 measured / A06 calculated / A03 estimated
+                "quality": _quality_code(s["slot_start"]),
             },
         }
         for i, s in enumerate(slots)
@@ -162,7 +188,7 @@ def build_operating_envelope(
             "position": i + 1,
             "Max_Quantity": {
                 "quantity": _kw_to_maw(s.get("import_max_kw", 0.0)),
-                "quality": "A06",
+                "quality": _quality_code(s["slot_start"]),
             },
         }
         for i, s in enumerate(slots)
