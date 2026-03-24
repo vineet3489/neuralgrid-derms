@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, Component, ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './stores/authStore'
 import { useGridStore } from './stores/gridStore'
@@ -23,6 +23,35 @@ import IntegrationsPage from './pages/IntegrationsPage'
 import SCADAGatewayPage from './pages/SCADAGatewayPage'
 import GlossaryPage from './pages/GlossaryPage'
 
+// ─── Error boundary — prevents a crashed page from blanking the whole app ────
+class PageErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null }
+  static getDerivedStateFromError(error: Error) { return { error } }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
+          <div className="text-4xl">⚠️</div>
+          <p className="text-sm font-medium text-gray-300">Page failed to render</p>
+          <p className="text-xs text-gray-500 max-w-sm text-center">
+            {(this.state.error as Error).message}
+          </p>
+          <button
+            className="text-xs text-indigo-400 underline mt-2"
+            onClick={() => this.setState({ error: null })}
+          >
+            Try again
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 // ─── Protected route guard ────────────────────────────────────────────────────
 // Wait for Zustand localStorage hydration before deciding to redirect.
 // Without _hasHydrated, the store briefly starts with token=null even when
@@ -43,7 +72,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (!token) return <Navigate to="/login" replace />
-  return <Layout>{children}</Layout>
+  return <Layout><PageErrorBoundary>{children}</PageErrorBoundary></Layout>
 }
 
 // ─── App initialiser (runs once on login, re-runs only if token changes) ─────

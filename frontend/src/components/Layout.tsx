@@ -22,22 +22,35 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 
-const NAV_ITEMS = [
+// roles: DEPLOY_ADMIN > OPERATOR > AGGREGATOR
+// Each item has an optional `roles` allowlist; omit = visible to all roles
+const NAV_ITEMS: {
+  path: string
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  roles?: string[]
+}[] = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/grid', label: 'Grid & Assets', icon: Zap },
   { path: '/dispatch', label: 'Flex Dispatch', icon: Radio },
-  { path: '/programs', label: 'Programs', icon: FileText },
-  { path: '/contracts', label: 'Contracts', icon: Shield },
-  { path: '/counterparties', label: 'Counterparties', icon: Users },
-  { path: '/settlement', label: 'Settlement', icon: DollarSign },
-  { path: '/forecasting', label: 'Forecasting', icon: TrendingUp },
-  { path: '/optimization', label: 'Optimization', icon: Cpu },
-  { path: '/reports', label: 'Reports', icon: BarChart3 },
-  { path: '/integrations', label: 'Integrations', icon: Network },
-  { path: '/scada', label: 'SCADA Gateway', icon: ServerCog },
-  { path: '/admin', label: 'Admin', icon: Settings },
+  { path: '/programs', label: 'Programs', icon: FileText, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },
+  { path: '/contracts', label: 'Contracts', icon: Shield, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },
+  { path: '/counterparties', label: 'Counterparties', icon: Users, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },
+  { path: '/settlement', label: 'Settlement', icon: DollarSign, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },
+  { path: '/forecasting', label: 'Forecasting', icon: TrendingUp, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },
+  { path: '/optimization', label: 'Optimization', icon: Cpu, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },
+  { path: '/reports', label: 'Reports', icon: BarChart3, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },
+  { path: '/integrations', label: 'Integrations & OE', icon: Network },
+  { path: '/scada', label: 'SCADA Gateway', icon: ServerCog, roles: ['OPERATOR', 'DEPLOY_ADMIN'] },
+  { path: '/admin', label: 'Admin', icon: Settings, roles: ['DEPLOY_ADMIN'] },
   { path: '/glossary', label: 'Glossary & Docs', icon: BookOpen },
 ]
+
+const ROLE_LABELS: Record<string, { label: string; color: string }> = {
+  DEPLOY_ADMIN: { label: 'Admin', color: 'text-purple-400' },
+  OPERATOR:     { label: 'Operator', color: 'text-blue-400' },
+  AGGREGATOR:   { label: 'Aggregator', color: 'text-green-400' },
+}
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const { user, currentDeployment, deployments, setDeployment, logout } = useAuthStore()
@@ -48,6 +61,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const criticalAlerts = unacknowledgedAlerts.filter((a) => a.severity === 'CRITICAL')
   const currentDep = deployments.find((d) => d.slug === currentDeployment)
   const isSSEN = currentDeployment === 'ssen'
+
+  // Resolve current user role for this deployment
+  const currentRole: string = (() => {
+    if (user?.is_superuser) return 'DEPLOY_ADMIN'
+    const match = user?.deployments?.find((ud) => ud.deployment_id === currentDep?.id)
+    return match?.role ?? 'OPERATOR'
+  })()
+
+  const visibleNav = NAV_ITEMS.filter(
+    (item) => !item.roles || item.roles.includes(currentRole)
+  )
+  const roleInfo = ROLE_LABELS[currentRole] ?? { label: currentRole, color: 'text-gray-400' }
 
   const handleLogout = () => {
     logout()
@@ -66,7 +91,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </div>
             <div>
               <div className="text-sm font-bold text-white">Neural Grid</div>
-              <div className="text-xs text-gray-400">L&T DERMS Platform</div>
+              <div className="text-xs text-gray-400">L&T Digital Energy Solutions</div>
             </div>
           </div>
         </div>
@@ -109,7 +134,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Nav Items */}
         <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
-          {NAV_ITEMS.map(({ path, label, icon: Icon }) => (
+          {visibleNav.map(({ path, label, icon: Icon }) => (
             <NavLink
               key={path}
               to={path}
@@ -144,6 +169,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 {user?.full_name || 'User'}
               </div>
               <div className="text-xs text-gray-500 truncate">{user?.email}</div>
+              <div className={`text-xs font-medium ${roleInfo.color}`}>{roleInfo.label}</div>
             </div>
           </div>
           <button

@@ -112,7 +112,7 @@ export default function LoginPage() {
               <Zap className="w-7 h-7 text-white" />
             </div>
             <h1 className="text-2xl font-bold text-white">Neural Grid DERMS</h1>
-            <p className="text-sm text-gray-400 mt-1">L&T Technology Services</p>
+            <p className="text-sm text-gray-400 mt-1">L&T Digital Energy Solutions</p>
             <div className="mt-2 flex items-center gap-2">
               <div className="h-px w-12 bg-gradient-to-r from-transparent to-indigo-600/50" />
               <span className="text-xs text-indigo-400 font-medium">Distributed Energy Resource Management</span>
@@ -236,7 +236,7 @@ export default function LoginPage() {
 
         {/* Footer */}
         <div className="text-center mt-4 text-xs text-gray-600">
-          © 2026 L&T Technology Services · Neural Grid DERMS v1.0
+          © 2026 L&T Digital Energy Solutions · Neural Grid DERMS v1.0
         </div>
       </div>
     </div>
