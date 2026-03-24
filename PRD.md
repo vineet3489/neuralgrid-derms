@@ -1,9 +1,13 @@
-# Neural Grid — L&T DERMS Platform
-## Product Requirements Document (PRD) v1.1
+# Neural Grid — L&T Digital Energy Solutions DERMS Platform
+## Product Requirements Document (PRD) v1.3
 **Date:** March 2026
-**Author:** L&T EduTech / Smart Grid Division
+**Author:** L&T Digital Energy Solutions — Smart Grid Division
 **Status:** Active Development
-**Changelog v1.1:** Added CIM-based aggregator exchange (IEC 62325 + IEC 62746-4), Kafka transport, OSM bounding-box area query + congested DT identification (System Solaire), and time-series DistFlow dynamic OE calculation.
+
+**Changelog:**
+- **v1.1:** CIM-based aggregator exchange (IEC 62325 + IEC 62746-4), Kafka transport, OSM bounding-box area query + congested DT identification, time-series DistFlow dynamic OE.
+- **v1.2:** Full D4G IEC 62746-4 spec compliance — `ReferenceEnergyCurve*_MarketDocument` format, EIC coding scheme (A01), MAW units, PT30M resolution, four Kafka topics, `MessageDocumentHeader`. SSEN IEC MarketDocument formats. Removed FK constraint on `audit_events.user_id`.
+- **v1.3:** Operator Console guided workflow, role-based navigation, D4G quality codes (A04/A06/A03) per OE slot, ETRAA Archive integration, DMS-passthrough forecast model, Simulation Parameters tab, production deployment on Render.com (Docker + PostgreSQL).
 
 ---
 
@@ -32,7 +36,10 @@
 21. [API Surface Summary](#21-api-surface-summary)
 22. [Non-Functional Requirements](#22-non-functional-requirements)
 23. [References](#23-references)
-21. [References](#21-references)
+24. [Operator Console *(v1.3)*](#24-operator-console-v13)
+25. [Forecasting Models *(v1.3)*](#25-forecasting-models-v13)
+26. [Integration Endpoints & ETRAA Archive *(v1.3)*](#26-integration-endpoints--etraa-archive-v13)
+27. [D4G Quality Codes *(v1.3)*](#27-d4g-quality-codes-v13)
 
 ---
 
@@ -123,7 +130,7 @@ HV (132kV/33kV)         MV (11kV)             LV (400V/230V)
 **Frontend**
 - React 18 + TypeScript + Vite
 - State: Zustand (auth + grid stores)
-- Map: react-leaflet v5 + Leaflet.js (OSM / Esri Satellite / CartoDB Dark)
+- Map: react-leaflet v4 + Leaflet.js (OSM / Esri Satellite / CartoDB Dark)
 - Charts: Recharts
 - Styling: Tailwind CSS v3
 - API: Axios with auto-auth interceptor
@@ -136,12 +143,13 @@ HV (132kV/33kV)         MV (11kV)             LV (400V/230V)
 
 ## 4. User Roles & Access Control
 
-| Role | Scope | Capabilities |
-|---|---|---|
-| `PLATFORM_ADMIN` | All deployments | Full access — user management, all deployments, all config |
-| `DEPLOY_ADMIN` | Assigned deployment | Admin within their deployment — config, integrations, DaaS keys, SCADA endpoints |
-| `OPERATOR` | Assigned deployment | Read + write — dispatch events, programs, contracts, forecasts, settlement |
-| `VIEWER` | Assigned deployment | Read-only — dashboards, grid state, reports |
+| Role | Scope | Navigation Access | Capabilities |
+|---|---|---|---|
+| `DEPLOY_ADMIN` | Assigned deployment | All pages including Admin | Full access — user management, config, integrations, DaaS keys, SCADA endpoints, Operator Console |
+| `OPERATOR` | Assigned deployment | All pages except Admin | Dispatch events, programs, contracts, forecasts, settlement, Operator Console, SCADA |
+| `AGGREGATOR` | Assigned deployment | Dashboard, Grid, Flex Dispatch, Integrations & OE, Glossary | View OE messages in D4G format, view grid state, view dispatch events |
+
+The user's role for the active deployment is displayed as a badge in the bottom-left sidebar (Admin / Operator / Aggregator). Navigation is automatically filtered — pages not accessible to the current role are hidden.
 
 **Authentication flow:**
 ```
@@ -1461,6 +1469,160 @@ Full interactive documentation: `http://localhost:8080/api/docs`
 | DaaS key security | SHA-256 hashed, plain key not stored | ✓ |
 | Horizontal scaling | Stateless API, shared DB | ✓ (Render.com config present) |
 | Audit trail | All write operations logged to audit_logs | ✓ |
+
+---
+
+## 24. Operator Console *(v1.3)*
+
+The Operator Console is a dedicated guided-workflow page for DSO/DNO operators responding to ADMS faults. It replaces the need to navigate across multiple pages to complete the ADMS fault → OE → aggregator dispatch cycle.
+
+### 24.1 Workflow Steps
+
+```
+Step 1        Step 2            Step 3          Step 4              Step 5
+ADMS Faults → CMZ & Window  →  Power Flow  →  Generate OE     →  Send to Aggregator
+              (select CMZ,      (DistFlow       (D4G IEC 62746-4   (Kafka + REST)
+               time horizon)     backward-       MarketDocument)
+                                 forward sweep)
+```
+
+**Step 1 — ADMS Faults:** Displays all CRITICAL and WARNING grid alerts from the connected ADMS in real time, with node ID, alert type, and message. Also shows live grid summary (total generation MW, load MW, assets online, assets curtailed).
+
+**Step 2 — CMZ & Window:** Operator selects the Constraint Management Zone to address (e.g. `CMZ-LERWICK-01`) and the OE time horizon (30 min, 1h, 2h, 4h, 8h). The platform shows the exact time window that will be covered.
+
+**Step 3 — Power Flow:** Triggers a DistFlow backward-forward sweep power flow on the LV network. Results show:
+- Convergence status and iteration count
+- Max / min voltage (per unit) — flagged red if outside 0.95–1.05 p.u. (ESQCR 2002)
+- Number of bus violations with bus IDs and violation type
+- Prerequisite notice if assets are not yet registered
+
+**Step 4 — Generate OE:** Creates a flex event for the selected CMZ/window, then calls the aggregator CIM endpoint to build a `ReferenceEnergyCurveOperatingEnvelope_MarketDocument` with:
+- Per-slot D4G quality codes (A04 measured / A06 calculated / A03 estimated)
+- MAW units, PT30M resolution
+- Full JSON preview visible in the UI
+
+**Step 5 — Send to Aggregator:** Dispatches the OE via:
+- Kafka topic `dso_operating_envelope` (if Kafka is configured)
+- REST to the aggregator's registered endpoint URL
+- Operator can select a specific registered aggregator or broadcast to all
+
+### 24.2 Access Control
+Accessible to `OPERATOR` and `DEPLOY_ADMIN` roles only.
+
+---
+
+## 25. Forecasting Models *(v1.3)*
+
+### 25.1 Model Selection
+The Forecasting page provides a model selector panel. Only one model is active at a time.
+
+| Model | Status | Description |
+|---|---|---|
+| **Bell Curve (Internal)** | ✅ Active | Sin half-wave solar model + diurnal load profile + EV arrival probability. Runs entirely within NeuralGrid — no external dependency. |
+| **DMS Passthrough** | ⚠ Requires ADMS LIVE | Uses load forecasts from the connected ADMS/DMS when that integration is switched to LIVE mode. Falls back to Bell Curve if ADMS is in SIMULATION mode. |
+| **ARIMA** | 🔜 Coming Soon | Statistical time-series trained on historical MDMS interval reads. |
+| **LSTM Neural Net** | 🔜 Coming Soon | Deep learning model trained on weather + smart meter data. |
+
+### 25.2 DMS Passthrough Mode
+To activate DMS Passthrough:
+1. Go to **Integrations & OE → Integration Connections**
+2. Find the ADMS integration (e.g. *GE Grid Solutions ADMS*)
+3. Toggle from **SIMULATION → LIVE**
+4. Configure the base URL and auth credentials in the Configure modal
+5. Return to Forecasting — load forecasts will now use DMS data; solar forecasting continues using the Bell Curve model
+
+---
+
+## 26. Integration Endpoints & ETRAA Archive *(v1.3)*
+
+### 26.1 Integration Configuration
+
+Every external integration has a **base URL** that is pre-populated with a sample/demo endpoint. Operators can replace this with their real production endpoint in the **Configure** modal (Integrations & OE → Integration Connections → Configure).
+
+| Integration | Type | Sample Endpoint | Auth |
+|---|---|---|---|
+| GE Grid Solutions ADMS (SSEN) | `ADMS` | `https://ge-adms-demo.ssen.co.uk/api/v2` | API_KEY or BASIC |
+| Alpha Flex IEEE 2030.5 (SSEN) | `DER_AGGREGATOR_IEEE2030_5` | `https://api.alphaflex.co.uk/2030.5/edev` | API_KEY |
+| Alpha Flex OpenADR (SSEN) | `DER_AGGREGATOR_OPENADR` | `https://vtn.alphaflex.co.uk/OpenADR2/Simple/2.0b` | NONE / API_KEY |
+| SSEN AMR/MDMS | `MDMS` | `https://mdms-api.ssen.co.uk/api/v1` | API_KEY |
+| Met Office Weather | `WEATHER_API` | `https://api.openweathermap.org/data/2.5/forecast` | API_KEY |
+| **ETRAA Archive (SSEN)** | `HISTORIAN` | `https://api.etraa.io/v1/timeseries` | API_KEY |
+| PUVVNL DMS | `ADMS` | `https://dms.puvvnl.up.gov.in/api/v1` | BASIC |
+| GMR AMISP IEEE 2030.5 | `DER_AGGREGATOR_IEEE2030_5` | `https://api.gmr-amisp.in/2030.5/edev` | API_KEY |
+| GMR AMISP OpenADR | `DER_AGGREGATOR_OPENADR` | `https://vtn.gmr-amisp.in/OpenADR2/Simple/2.0b` | NONE |
+| **ETRAA Archive (PUVVNL)** | `HISTORIAN` | `https://api.etraa.io/v1/timeseries` | API_KEY |
+
+### 26.2 ETRAA Archive Integration
+
+ETRAA is the historical metering archive used for settlement verification and baseline calculation. The integration type is `HISTORIAN`.
+
+**Query format (POST to `/timeseries/query`):**
+```json
+{
+  "resource_id": "CMZ-LERWICK-01",
+  "start": "2026-03-01T00:00:00Z",
+  "end":   "2026-03-02T00:00:00Z",
+  "interval": "PT30M"
+}
+```
+
+**Use cases within Neural Grid:**
+- Settlement verification — compare dispatched kW vs. metered delivery
+- Baseline calculation for Flex offers (what would have happened without dispatch)
+- Historical data messages published via D4G topic `historical_data`
+
+**Mode:** Set to SIMULATION by default. Switch to LIVE with your ETRAA API key to pull real historical data.
+
+### 26.3 Simulation Parameters Tab
+
+A fourth tab in Integrations & OE — **Simulation Parameters** — shows the configurable parameters for each integration's simulation model, with units and descriptions. Operators can click **Edit Simulation Parameters** to change values without restarting the platform.
+
+Key parameters per integration type:
+
+| Integration | Key Parameters |
+|---|---|
+| `ADMS` | `solar_peak_factor`, `cloud_noise_factor`, `feeder_loading_warn_pct`, `voltage_nominal_v`, `voltage_high_warn_v`, `voltage_low_warn_v` |
+| `DER_AGGREGATOR_IEEE2030_5` | `aggregator_poll_interval_seconds`, `oe_ack_timeout_seconds`, `default_response_time_seconds` |
+| `DER_AGGREGATOR_OPENADR` | `vtn_push_enabled`, `event_lead_time_minutes`, `ven_registration_timeout_minutes` |
+| `MDMS` | `meter_read_interval_minutes`, `data_latency_seconds` |
+| `HISTORIAN` | `query_page_size`, `max_history_days` |
+
+Changes to simulation parameters take effect on the next simulation cycle (ADMS: 30 s, forecasts: 15 min).
+
+---
+
+## 27. D4G Quality Codes *(v1.3)*
+
+Each point in a `ReferenceEnergyCurveOperatingEnvelope_MarketDocument` carries a **quality code** indicating data provenance, per IEC 62746-4 and the D4G spec.
+
+### 27.1 Quality Code Assignment
+
+| Code | Name | Assignment Rule |
+|---|---|---|
+| **A04** | Measured | Slot start ≤ 1 hour from now — within live telemetry horizon, values from real-time SCADA/ADMS |
+| **A06** | Calculated | Slot start 1–8 hours from now — deterministic DistFlow power flow result |
+| **A03** | Estimated | Slot start > 8 hours from now — probabilistic forecast-based |
+
+The platform computes the quality code automatically based on the temporal distance from the current time at message generation.
+
+### 27.2 Example OE Message Point
+```json
+{
+  "position": 1,
+  "Max_Quantity": {
+    "quantity": 2.500,
+    "quality": "A06"
+  }
+}
+```
+
+Quality code `A06` (Calculated) means this slot's OE limit was derived from a DistFlow power flow run, not from live telemetry or a long-horizon forecast.
+
+### 27.3 Receiving Side (DER Aggregator)
+Aggregators must honour the quality code when deciding how to respond:
+- `A04` — high confidence, respond immediately
+- `A06` — calculated limit, apply with normal confirmation lead time
+- `A03` — estimated, may be revised as the slot approaches; re-publish expected nearer the slot
 
 ---
 
