@@ -81,6 +81,10 @@ async def init_db() -> None:
         "app.settlement.models",
         "app.forecasting.models",
         "app.optimization.models",
+        "app.integrations.config_mgr.models",
+        "app.aggregator.models",
+        "app.lv_network.models",
+        "app.scada_gateway.models",
     ]
     for mod in _optional_modules:
         try:

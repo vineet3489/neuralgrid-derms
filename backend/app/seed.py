@@ -71,4 +71,28 @@ async def seed_all(db: AsyncSession) -> None:
     except Exception as exc:
         logger.warning("  programs seed failed: %s", exc)
 
+    # 7. Integration configs (simulation/live mode per external system)
+    try:
+        from app.integrations.config_mgr.service import seed_integration_configs  # noqa: PLC0415
+        await seed_integration_configs(db)
+        logger.info("  integration configs seeded")
+    except Exception as exc:
+        logger.warning("  integration configs seed failed: %s", exc)
+
+    # 8. LV networks (synthetic behind DTs)
+    try:
+        from app.lv_network.service import seed_lv_networks  # noqa: PLC0415
+        await seed_lv_networks(db)
+        logger.info("  LV networks seeded")
+    except Exception as exc:
+        logger.warning("  LV networks seed skipped: %s", exc)
+
+    # 9. SCADA gateway endpoints
+    try:
+        from app.scada_gateway.service import seed_scada_endpoints  # noqa: PLC0415
+        await seed_scada_endpoints(db)
+        logger.info("  SCADA endpoints seeded")
+    except Exception as exc:
+        logger.warning("  SCADA endpoints seed skipped: %s", exc)
+
     logger.info("seed_all complete.")

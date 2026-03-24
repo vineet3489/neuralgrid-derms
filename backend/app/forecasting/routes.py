@@ -1,10 +1,16 @@
 """Forecasting API endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.core.deps import CurrentUserDep, DBDep, DeploymentDep
-from app.forecasting.service import get_latest_forecast, run_forecast_update
+from app.forecasting.service import (
+    generate_asset_level_forecast,
+    generate_lv_feeder_forecast,
+    generate_oe_headroom_forecast,
+    get_latest_forecast,
+    run_forecast_update,
+)
 
 router = APIRouter(prefix="/api/v1/forecasting", tags=["forecasting"])
 
@@ -64,6 +70,83 @@ async def get_all_forecasts(
         "load": load,
         "flex": flex,
     }
+
+
+@router.get("/lv-feeder/{feeder_id}")
+async def get_lv_feeder_forecast(
+    feeder_id: str,
+    db: DBDep,
+    current_user: CurrentUserDep,
+    deployment_id: DeploymentDep,
+    horizon_hours: int = Query(48, ge=1, le=168, description="Forecast horizon in hours"),
+) -> dict:
+    """
+    Load/solar/EV generation forecast for an LV feeder behind a DT.
+    Returns 30-min intervals with load_kw, solar_kw, ev_kw, net_kw and confidence bands.
+    """
+    try:
+        result = await generate_lv_feeder_forecast(db, feeder_id, deployment_id, horizon_hours)
+        return {
+            "feeder_id": feeder_id,
+            "deployment_id": deployment_id,
+            "horizon_hours": horizon_hours,
+            "interval_count": len(result),
+            "intervals": result,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/asset/{asset_id}")
+async def get_asset_forecast(
+    asset_id: str,
+    db: DBDep,
+    current_user: CurrentUserDep,
+    deployment_id: DeploymentDep,
+    horizon_hours: int = Query(48, ge=1, le=168, description="Forecast horizon in hours"),
+) -> dict:
+    """
+    Asset-specific generation or consumption forecast.
+    Accounts for asset type: PV bell-curve, BESS flat-zero, EV arrival pattern,
+    heat pump temperature profile, or industrial weekday/weekend profile.
+    """
+    try:
+        result = await generate_asset_level_forecast(db, asset_id, deployment_id, horizon_hours)
+        return {
+            "asset_id": asset_id,
+            "deployment_id": deployment_id,
+            "horizon_hours": horizon_hours,
+            "interval_count": len(result),
+            "intervals": result,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/oe-headroom/{cmz_id}")
+async def get_oe_headroom_forecast(
+    cmz_id: str,
+    db: DBDep,
+    current_user: CurrentUserDep,
+    deployment_id: DeploymentDep,
+    horizon_hours: int = Query(24, ge=1, le=72, description="Forecast horizon in hours"),
+) -> dict:
+    """
+    Operating envelope headroom forecast for a CMZ.
+    Returns available flex headroom, OE limits, and forecast load/generation
+    at 30-min intervals.  Feeds directly into the OE planning workflow.
+    """
+    try:
+        result = await generate_oe_headroom_forecast(db, cmz_id, deployment_id, horizon_hours)
+        return {
+            "cmz_id": cmz_id,
+            "deployment_id": deployment_id,
+            "horizon_hours": horizon_hours,
+            "interval_count": len(result),
+            "intervals": result,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/refresh")

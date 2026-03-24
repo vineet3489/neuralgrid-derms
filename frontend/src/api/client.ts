@@ -115,4 +115,89 @@ export const api = {
   reportSummary: () => apiClient.get('/reports/summary'),
   exportReport: (format: string) =>
     apiClient.get(`/reports/export?format=${format}`, { responseType: 'blob' }),
+
+  // Integration config
+  integrations: () => apiClient.get('/integrations'),
+  integration: (id: string) => apiClient.get(`/integrations/${id}`),
+  createIntegration: (data: any) => apiClient.post('/integrations', data),
+  updateIntegration: (id: string, data: any) => apiClient.put(`/integrations/${id}`, data),
+  testIntegration: (id: string) => apiClient.post(`/integrations/${id}/test`),
+  toggleIntegrationMode: (id: string) => apiClient.post(`/integrations/${id}/toggle-mode`),
+  getSimParams: (id: string) => apiClient.get(`/integrations/${id}/sim-params`),
+  updateSimParams: (id: string, params: any) => apiClient.put(`/integrations/${id}/sim-params`, params),
+
+  // OE formatted messages
+  oeMessagesFormatted: (eventId: string, protocol: string) =>
+    apiClient.get(`/events/${eventId}/oe-messages/formatted?protocol=${protocol}`),
+
+  // Aggregator
+  aggregatorDevices: () => apiClient.get('/aggregator/devices'),
+  registerAggregator: (data: any) => apiClient.post('/aggregator/register', data),
+
+  // Power flow
+  runPowerFlow: () => apiClient.post('/grid/power-flow'),
+
+  // LV Network
+  lvNetwork: (dtNodeId: string, provider?: string) =>
+    apiClient.get(`/lv-network/dt/${dtNodeId}?provider=${provider || 'overpass'}`),
+  lvNetworkPowerFlow: (dtNodeId: string) =>
+    apiClient.post(`/lv-network/dt/${dtNodeId}/power-flow`),
+  lvNetworkRebuild: (dtNodeId: string, provider: string) =>
+    apiClient.get(`/lv-network/dt/${dtNodeId}?provider=${provider}&force_rebuild=true`),
+  lvNetworkProviders: () => apiClient.get('/lv-network/providers'),
+  lvNetworkList: () => apiClient.get('/lv-network/'),
+
+  // SSEN OE format
+  oeMessagesSSEN: (eventId: string) =>
+    apiClient.get(`/events/${eventId}/oe-messages/formatted?protocol=SSEN_IEC`),
+
+  // Enhanced forecasting
+  forecastLVFeeder: (feederId: string) =>
+    apiClient.get(`/forecasts/lv-feeder/${feederId}`),
+  forecastAsset: (assetId: string) =>
+    apiClient.get(`/forecasts/asset/${assetId}`),
+  forecastOEHeadroom: (cmzId: string) =>
+    apiClient.get(`/forecasts/oe-headroom/${cmzId}`),
+
+  // Active events (for OE documents)
+  activeEvents: (params?: Record<string, string>) =>
+    apiClient.get('/events/active', { params }),
+
+  // SCADA Gateway — endpoints
+  scadaEndpoints: () => apiClient.get('/scada/endpoints'),
+  createScadaEndpoint: (data: unknown) => apiClient.post('/scada/endpoints', data),
+  updateScadaEndpoint: (id: string, data: unknown) => apiClient.put(`/scada/endpoints/${id}`, data),
+  deleteScadaEndpoint: (id: string) => apiClient.delete(`/scada/endpoints/${id}`),
+  pushScadaEndpoint: (id: string) => apiClient.post(`/scada/endpoints/${id}/push`),
+
+  // SCADA Gateway — snapshot
+  scadaSnapshot: () => apiClient.get('/scada/snapshot'),
+  scadaSnapshotGrid: () => apiClient.get('/scada/snapshot/grid'),
+  scadaSnapshotLvNetwork: () => apiClient.get('/scada/snapshot/lv-network'),
+  scadaSnapshotAssets: () => apiClient.get('/scada/snapshot/assets'),
+  scadaSnapshotOeLimits: () => apiClient.get('/scada/snapshot/oe-limits'),
+
+  // SCADA Gateway — DaaS API keys
+  daasKeys: () => apiClient.get('/scada/daas/keys'),
+  createDaasKey: (data: unknown) => apiClient.post('/scada/daas/keys', data),
+  revokeDaasKey: (id: string) => apiClient.delete(`/scada/daas/keys/${id}`),
+  daasKeyUsage: (id: string) => apiClient.get(`/scada/daas/keys/${id}/usage`),
+
+  // LV Network — area and congested DTs
+  congestedDTs: (threshold_pct?: number, limit?: number) =>
+    apiClient.get(`/lv-network/congested-dts?threshold_pct=${threshold_pct ?? 75}&limit=${limit ?? 20}`),
+  lvNetworkArea: (south: number, west: number, north: number, east: number, provider?: string) =>
+    apiClient.get(`/lv-network/area?south=${south}&west=${west}&north=${north}&east=${east}&provider=${provider ?? 'overpass'}`),
+
+  // Dynamic OE (time-series DistFlow)
+  dynamicOE: (cmzId: string, horizonHours?: number, recalculate?: boolean) =>
+    apiClient.get(`/lv-network/dynamic-oe/${cmzId}?horizon_hours=${horizonHours ?? 48}&recalculate=${recalculate ?? false}`),
+
+  // CIM aggregator — IEC 62325 + IEC 62746-4
+  cimProtocols: () => apiClient.get('/aggregator/cim/protocols'),
+  cimCapability: (data: unknown) => apiClient.post('/aggregator/cim/capability', data),
+  cimStatus: (data: unknown) => apiClient.post('/aggregator/cim/status', data),
+  cimDispatch: (eventId: string) => apiClient.get(`/aggregator/cim/dispatch/${eventId}`),
+  cimBidTemplate: (cmzId: string) => apiClient.get(`/aggregator/cim/bid/${cmzId}`),
+  cimSubmitBid: (data: unknown) => apiClient.post('/aggregator/cim/bid', data),
 }

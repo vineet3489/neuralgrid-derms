@@ -27,10 +27,13 @@ import { useGridStore } from '../stores/gridStore'
 import { useAuthStore } from '../stores/authStore'
 import { api } from '../api/client'
 import GISMap from '../components/ui/GISMap'
+import LVNetworkPanel from '../components/ui/LVNetworkPanel'
+import CongestedDTOverlay from '../components/ui/CongestedDTOverlay'
 import StatusBadge from '../components/ui/StatusBadge'
 import Modal from '../components/ui/Modal'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
 import type { DERAsset, DERAssetLive, GridNode, TelemetryPoint } from '../types'
+import type { LVNetworkGeoJSON, LVBusPoint } from '../components/ui/GISMap'
 
 type Tab = 'gis' | 'assets' | 'hosting' | 'nodes'
 
@@ -195,6 +198,10 @@ export default function GridPage() {
   const [typeFilter, setTypeFilter] = useState('ALL')
   const [statusFilter, setStatusFilter] = useState('ALL')
   const [selectedAsset, setSelectedAsset] = useState<DERAsset | null>(null)
+  const [showCongestion, setShowCongestion] = useState(false)
+  const [selectedDT, setSelectedDT] = useState<{ nodeId: string; name: string } | null>(null)
+  const [lvNetworkData, setLvNetworkData] = useState<LVNetworkGeoJSON | null>(null)
+  const [lvBuses, setLvBuses] = useState<LVBusPoint[]>([])
   const [showRegisterModal, setShowRegisterModal] = useState(false)
   const [registerForm, setRegisterForm] = useState<RegisterAssetForm>({
     name: '', type: 'BATTERY', phase: 'THREE', capacity_kw: '',
@@ -221,9 +228,94 @@ export default function GridPage() {
     }
   }, [currentDeployment, gridState])
 
+  const loadLVNetworkData = useCallback(async () => {
+    try {
+      const res = await api.lvNetworkList()
+      // Backend returns a list of LV network summaries; convert to a combined GeoJSON if features are present
+      const data = res.data
+      if (data && data.type === 'FeatureCollection') {
+        setLvNetworkData(data as LVNetworkGeoJSON)
+        // Extract bus points embedded as Point features
+        const buses: LVBusPoint[] = []
+        for (const feat of (data as LVNetworkGeoJSON).features) {
+          const f = feat as any
+          if (f.geometry?.type === 'Point' && f.properties?.bus_ref) {
+            const [lng, lat] = f.geometry.coordinates as [number, number]
+            buses.push({
+              id: f.properties.id ?? f.properties.bus_ref,
+              bus_ref: f.properties.bus_ref,
+              lat,
+              lng,
+              v_pu: f.properties.v_pu ?? 1.0,
+              v_v: f.properties.v_v ?? 230,
+              voltage_status: f.properties.voltage_status ?? 'NORMAL',
+              p_kw: f.properties.p_kw ?? 0,
+              q_kvar: f.properties.q_kvar ?? 0,
+              asset_id: f.properties.asset_id,
+              asset_type: f.properties.asset_type,
+              asset_name: f.properties.asset_name,
+            })
+          }
+        }
+        if (buses.length > 0) setLvBuses(buses)
+      } else if (Array.isArray(data)) {
+        // Merge multiple FeatureCollections into one
+        const allFeatures: LVNetworkGeoJSON['features'] = []
+        for (const item of data) {
+          if (item?.geojson?.features) {
+            allFeatures.push(...item.geojson.features)
+          }
+        }
+        if (allFeatures.length > 0) {
+          setLvNetworkData({ type: 'FeatureCollection', features: allFeatures })
+        }
+
+        // Extract LV bus points from all network items
+        const buses: LVBusPoint[] = []
+        for (const item of data) {
+          if (Array.isArray(item?.buses)) {
+            for (const b of item.buses) {
+              if (b.lat != null && b.lng != null) {
+                buses.push({
+                  id: b.id ?? b.bus_ref,
+                  bus_ref: b.bus_ref ?? b.id,
+                  lat: b.lat,
+                  lng: b.lng,
+                  v_pu: b.v_pu ?? 1.0,
+                  v_v: b.v_v ?? 230,
+                  voltage_status: b.voltage_status ?? 'NORMAL',
+                  p_kw: b.p_kw ?? 0,
+                  q_kvar: b.q_kvar ?? 0,
+                  asset_id: b.asset_id,
+                  asset_type: b.asset_type,
+                  asset_name: b.asset_name,
+                })
+              }
+            }
+          }
+        }
+        if (buses.length > 0) setLvBuses(buses)
+      }
+    } catch {
+      // LV network data is optional — fail silently
+    }
+  }, [])
+
+  const handleSelectDT = useCallback(
+    (dtNodeId: string) => {
+      const dtNode = nodes.find((n) => n.node_id === dtNodeId)
+      setSelectedDT({ nodeId: dtNodeId, name: dtNode?.name ?? dtNodeId })
+    },
+    [nodes],
+  )
+
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  useEffect(() => {
+    loadLVNetworkData()
+  }, [loadLVNetworkData])
 
   // Sync nodes from grid store
   useEffect(() => {
@@ -297,19 +389,41 @@ export default function GridPage() {
             <div className="card p-0 overflow-hidden">
               <div className="flex items-center justify-between p-4 border-b border-gray-700">
                 <h2 className="text-sm font-semibold text-gray-200">Network Topology Map</h2>
-                <div className="flex items-center gap-2 text-xs text-gray-400">
-                  <span>{liveAssets.filter((a) => a.status === 'ONLINE').length} online</span>
-                  <span>·</span>
-                  <span className="text-amber-400">{liveAssets.filter((a) => a.status === 'CURTAILED').length} curtailed</span>
-                  <span>·</span>
-                  <span className="text-red-400">{liveAssets.filter((a) => a.status === 'OFFLINE').length} offline</span>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 text-xs text-gray-400">
+                    <span>{liveAssets.filter((a) => a.status === 'ONLINE').length} online</span>
+                    <span>·</span>
+                    <span className="text-amber-400">{liveAssets.filter((a) => a.status === 'CURTAILED').length} curtailed</span>
+                    <span>·</span>
+                    <span className="text-red-400">{liveAssets.filter((a) => a.status === 'OFFLINE').length} offline</span>
+                  </div>
+                  <button
+                    onClick={() => setShowCongestion((v) => !v)}
+                    className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+                      showCongestion
+                        ? 'bg-amber-600/20 border-amber-600/50 text-amber-400'
+                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    Congestion Analysis
+                  </button>
                 </div>
               </div>
+              <CongestedDTOverlay visible={showCongestion} onSelectDT={handleSelectDT} />
               <GISMap
                 nodes={nodes}
                 assets={liveAssets}
                 deployment={currentDeployment}
                 height={520}
+                onSelectAsset={(asset) => {
+                  // Find the full DERAsset to open detail panel
+                  const full = assets.find((a) => a.id === asset.id)
+                  if (full) setSelectedAsset(full)
+                }}
+                onSelectDT={handleSelectDT}
+                lvNetworkData={lvNetworkData}
+                lvBuses={lvBuses}
+                flexEnrolledBusIds={[]}
               />
             </div>
           )}
@@ -585,6 +699,16 @@ export default function GridPage() {
       {/* Asset Detail Panel */}
       {selectedAsset && (
         <AssetDetailPanel asset={selectedAsset} onClose={() => setSelectedAsset(null)} />
+      )}
+
+      {/* LV Network Panel */}
+      {selectedDT && (
+        <LVNetworkPanel
+          dtNodeId={selectedDT.nodeId}
+          dtName={selectedDT.name}
+          deployment={currentDeployment}
+          onClose={() => setSelectedDT(null)}
+        />
       )}
 
       {/* Register Asset Modal */}

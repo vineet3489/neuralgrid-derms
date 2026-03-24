@@ -40,6 +40,22 @@ async def start_background_tasks() -> None:
     asyncio.create_task(dispatch_loop(), name="dispatch_loop")
     asyncio.create_task(forecast_loop(), name="forecast_loop")
     asyncio.create_task(broadcast_loop(manager), name="broadcast_loop")
+
+    from app.scada_gateway.background import scada_push_loop
+    asyncio.create_task(scada_push_loop(), name="scada_push_loop")
+
+    from app.lv_network.background import dynamic_oe_loop
+    asyncio.create_task(dynamic_oe_loop(), name="dynamic_oe_loop")
+
+    from app.aggregator.kafka_transport import start_telemetry_consumer, kafka_enabled
+    if kafka_enabled():
+        from app.database import AsyncSessionLocal
+        asyncio.create_task(
+            start_telemetry_consumer(AsyncSessionLocal, "default"),
+            name="kafka_consumer",
+        )
+        logger.info("Kafka telemetry consumer task started.")
+
     logger.info("All background tasks started.")
 
 
@@ -123,6 +139,14 @@ _optional_routers = [
     ("app.assets.routes", "router", None),
     ("app.counterparties.routes", "router", None),
     ("app.integrations.adms.simulator", "router", None),
+    # Integration Configuration Manager — simulation/live mode per external system
+    ("app.integrations.config_mgr.routes", "router", None),
+    # DER Aggregator VTN Server — IEEE 2030.5 + OpenADR endpoints
+    ("app.aggregator.routes", "router", None),
+    # LV Network module — OSM/synthetic LV feeder topology + DistFlow power flow
+    ("app.lv_network.routes", "router", None),
+    # SCADA Gateway — outbound push to SCADA/ADMS/Historian + DaaS API key management
+    ("app.scada_gateway.routes", "router", None),
 ]
 
 # Modules that use short prefixes — we supply the API prefix at include time

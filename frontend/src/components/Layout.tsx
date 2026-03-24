@@ -16,6 +16,9 @@ import {
   Cpu,
   DollarSign,
   Settings,
+  Network,
+  ServerCog,
+  BookOpen,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -30,7 +33,10 @@ const NAV_ITEMS = [
   { path: '/forecasting', label: 'Forecasting', icon: TrendingUp },
   { path: '/optimization', label: 'Optimization', icon: Cpu },
   { path: '/reports', label: 'Reports', icon: BarChart3 },
+  { path: '/integrations', label: 'Integrations', icon: Network },
+  { path: '/scada', label: 'SCADA Gateway', icon: ServerCog },
   { path: '/admin', label: 'Admin', icon: Settings },
+  { path: '/glossary', label: 'Glossary & Docs', icon: BookOpen },
 ]
 
 export default function Layout({ children }: { children: React.ReactNode }) {

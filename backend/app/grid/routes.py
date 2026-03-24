@@ -1,4 +1,4 @@
-"""Grid API endpoints — real-time state, CMZs, nodes, alerts, dashboard."""
+"""Grid API endpoints — real-time state, CMZs, nodes, alerts, dashboard, power flow."""
 from __future__ import annotations
 
 import json
@@ -378,3 +378,47 @@ async def get_dashboard(
         "recent_events": recent_events,
         "forecast_24h": forecast_24h,
     }
+
+
+# ── Power Flow Analysis ───────────────────────────────────────────────────────
+
+@router.post("/power-flow")
+async def run_power_flow_endpoint(
+    db: DBDep,
+    current_user: CurrentUserDep,
+    deployment_id: DeploymentDep,
+    use_adms: bool = Query(
+        False,
+        description=(
+            "If True, attempt to fetch live ADMS topology. "
+            "Falls back to simulation model when ADMS is not connected."
+        ),
+    ),
+) -> dict:
+    """
+    Run power flow analysis using the current grid state.
+
+    Executes a Backward-Forward Sweep (DistFlow) over the radial distribution
+    network topology derived from the running simulation (or ADMS when live).
+
+    Returns per-bus voltages, line losses, total generation/load balance,
+    and a list of voltage violations (buses outside ±6% nominal).
+
+    Falls back to the simulation model when ADMS is not connected or
+    use_adms=False (the default).
+    """
+    from app.grid.simulation import get_grid_state
+    from app.grid.power_flow import run_power_flow
+
+    state = get_grid_state(deployment_id)
+    if not state:
+        raise HTTPException(
+            status_code=404,
+            detail="No grid state available — simulation not yet started",
+        )
+
+    result = run_power_flow(state, deployment_id)
+    result["deployment_id"] = deployment_id
+    result["source"] = "SIMULATION"   # Will be "ADMS" when live ADMS is connected
+    result["timestamp"] = datetime.now(timezone.utc).isoformat()
+    return result

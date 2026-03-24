@@ -13,6 +13,9 @@ from app.core.deps import CurrentUserDep, DBDep, DeploymentDep
 from app.dispatch.models import EventStatus, FlexEvent, OEMessage
 from app.dispatch.service import complete_event, create_flex_event, dispatch_event
 
+# OE formatter import — keep here so it is always available at module level
+from app.assets.models import DERAsset  # noqa: F401 (used inside formatted endpoint)
+
 router = APIRouter(prefix="/api/v1/events", tags=["dispatch"])
 
 
@@ -231,6 +234,288 @@ async def complete_flex_event(
         return _event_to_dict(event)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/{event_id}/oe-messages/formatted")
+async def get_oe_messages_formatted(
+    event_id: str,
+    db: DBDep,
+    current_user: CurrentUserDep,
+    deployment_id: DeploymentDep,
+    protocol: str = Query(
+        "IEEE_2030_5",
+        description="IEEE_2030_5 / OPENADR_2B / IEC_62746_4 / SSEN_IEC / RAW",
+    ),
+) -> dict:
+    """
+    Return OE messages formatted per the requested protocol.
+
+    IEEE_2030_5  — DERControl resource JSON (as sent to an IEEE 2030.5 aggregator)
+    OPENADR_2B   — oadrDistributeEvent JSON (would be XML in production)
+    IEC_62746_4  — IEC 62746-4 Operating Envelope message
+    RAW          — raw DB records with all fields
+    """
+    # Fetch event
+    event_result = await db.execute(
+        select(FlexEvent).where(
+            FlexEvent.id == event_id,
+            FlexEvent.deployment_id == deployment_id,
+        )
+    )
+    event = event_result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    # Fetch OE messages
+    oe_result = await db.execute(
+        select(OEMessage).where(OEMessage.event_id == event_id)
+    )
+    oe_messages = oe_result.scalars().all()
+
+    # Load asset info for names / refs
+    asset_map: dict = {}
+    try:
+        from app.assets.models import DERAsset as _DERAsset
+        if oe_messages:
+            asset_ids = [m.asset_id for m in oe_messages]
+            assets_result = await db.execute(
+                select(_DERAsset).where(_DERAsset.id.in_(asset_ids))
+            )
+            asset_map = {a.id: a for a in assets_result.scalars().all()}
+    except Exception:
+        pass
+
+    start_unix = int(event.start_time.timestamp()) if event.start_time else 0
+    duration_secs = event.duration_minutes * 60
+
+    proto = protocol.upper()
+
+    # ── SSEN IEC MarketDocument ───────────────────────────────────────────────
+    if proto == "SSEN_IEC":
+        from app.dispatch import ssen_messages as _ssen
+
+        oe_doc = _ssen.build_operating_envelope_doc(
+            event=event,
+            oe_messages=list(oe_messages),
+            deployment_id=deployment_id,
+            cmz_id=event.cmz_id,
+        )
+
+        start_iso = event.start_time.strftime("%Y-%m-%dT%H:%M:%SZ") if event.start_time else ""
+        end_iso = event.end_time.strftime("%Y-%m-%dT%H:%M:%SZ") if event.end_time else ""
+
+        # Total export capacity in MW for the flex offer / activation templates
+        total_export_kw = sum((m.export_max_kw or 0.0) for m in oe_messages)
+        total_export_mw = round(total_export_kw / 1000.0, 6)
+        delivered_mw = round((event.delivered_kw or 0.0) / 1000.0, 6)
+
+        envelope_mrid = (
+            oe_doc["OperatingEnvelope_MarketDocument"]["mRID"]
+        )
+
+        # Aggregator ref — use first asset's counterparty or fall back to event ref
+        aggregator_ref = event.event_ref
+        if asset_map:
+            first_asset = next(iter(asset_map.values()), None)
+            if first_asset:
+                aggregator_ref = getattr(first_asset, "counterparty_id", event.event_ref) or event.event_ref
+
+        flex_offer_template = _ssen.build_flex_offer_doc(
+            envelope_mrid=envelope_mrid,
+            aggregator_ref=aggregator_ref,
+            cmz_id=event.cmz_id,
+            start_time=start_iso,
+            end_time=end_iso,
+            direction="Decrease",   # default: curtailment (export reduction)
+            capacity_mw=total_export_mw,
+        )
+
+        activation_template = _ssen.build_activation_doc(
+            event_ref=event.event_ref,
+            requested_mw=total_export_mw,
+            cmz_id=event.cmz_id,
+        )
+
+        performance_template = _ssen.build_performance_doc(
+            event_ref=event.event_ref,
+            delivered_mw=delivered_mw,
+            cmz_id=event.cmz_id,
+        )
+
+        ack_template = _ssen.build_ack_doc(received_mrid=envelope_mrid)
+
+        return {
+            "protocol": "SSEN_IEC",
+            "document_type": "OperatingEnvelope_MarketDocument",
+            "document": oe_doc,
+            "related_documents": {
+                "flex_offer_template": flex_offer_template,
+                "activation_template": activation_template,
+                "performance_template": performance_template,
+                "acknowledgement_template": ack_template,
+            },
+        }
+
+    # ── IEEE 2030.5 ───────────────────────────────────────────────────────────
+    if proto == "IEEE_2030_5":
+        formatted = []
+        for m in oe_messages:
+            asset = asset_map.get(m.asset_id)
+            asset_ref = getattr(asset, "asset_ref", m.asset_id)
+            control: dict = {
+                "mRID": f"{event.event_ref}-{asset_ref}",
+                "description": f"{event.event_type} — {event.cmz_id}",
+                "creationTime": int(datetime.now(timezone.utc).timestamp()),
+                "deviceLFDI": asset_ref,
+                "DERControlBase": {
+                    "opModMaxLimW": {
+                        "value": int((m.export_max_kw or 0) * 1000),
+                        "multiplier": -3,
+                        "unit": "W",
+                    },
+                },
+                "interval": {
+                    "start": start_unix,
+                    "duration": duration_secs,
+                },
+                "primacy": 10,
+                "status": 1 if event.status == "DISPATCHED" else 0,
+                "_channel": m.delivery_channel,
+                "_ack_received": m.ack_received,
+            }
+            if m.import_max_kw is not None:
+                control["DERControlBase"]["opModImpLimW"] = {
+                    "value": int(m.import_max_kw * 1000),
+                    "multiplier": -3,
+                    "unit": "W",
+                }
+            formatted.append(control)
+
+        return {
+            "protocol": "IEEE_2030_5",
+            "event_ref": event.event_ref,
+            "message_count": len(formatted),
+            "messages": formatted,
+        }
+
+    # ── OpenADR 2.0b ──────────────────────────────────────────────────────────
+    elif proto == "OPENADR_2B":
+        targets: List[str] = []
+        signals: List[dict] = []
+        for m in oe_messages:
+            asset = asset_map.get(m.asset_id)
+            targets.append(getattr(asset, "asset_ref", m.asset_id))
+            if m.export_max_kw is not None:
+                signals.append({
+                    "signalName": "LOAD_CONTROL",
+                    "signalType": "delta",
+                    "signalID": f"SIG-{m.id[:8]}",
+                    "intervals": [
+                        {
+                            "uid": 0,
+                            "duration": duration_secs,
+                            "payloadFloat": {"value": -(m.export_max_kw)},
+                        }
+                    ],
+                    "currentValue": {
+                        "payloadFloat": {"value": -(m.export_max_kw or 0)}
+                    },
+                })
+
+        return {
+            "protocol": "OpenADR_2.0b",
+            "oadrDistributeEvent": {
+                "requestID": f"REQ-{event.event_ref}",
+                "oadrEvents": [
+                    {
+                        "eiEvent": {
+                            "eventDescriptor": {
+                                "eventID": event.event_ref,
+                                "modificationNumber": 0,
+                                "marketContext": (
+                                    f"http://neuralgrid.io/{deployment_id}"
+                                ),
+                                "eventStatus": (
+                                    "active"
+                                    if event.status == "DISPATCHED"
+                                    else "far"
+                                ),
+                                "createdDateTime": (
+                                    event.start_time.isoformat()
+                                    if event.start_time
+                                    else ""
+                                ),
+                                "vtnComment": event.operator_notes or "",
+                            },
+                            "eiActivePeriod": {
+                                "dtstart": (
+                                    event.start_time.isoformat()
+                                    if event.start_time
+                                    else ""
+                                ),
+                                "duration": f"PT{event.duration_minutes}M",
+                            },
+                            "eiEventSignals": {"eiEventSignal": signals},
+                            "eiTarget": {"resourceID": targets},
+                        },
+                        "oadrResponseRequired": "always",
+                    }
+                ],
+            },
+        }
+
+    # ── IEC 62746-4 ───────────────────────────────────────────────────────────
+    elif proto == "IEC_62746_4":
+        oes = []
+        for m in oe_messages:
+            asset = asset_map.get(m.asset_id)
+            meter_id = getattr(asset, "meter_id", None) or m.asset_id
+            oes.append({
+                "operatingEnvelopeID": f"{event.event_ref}-{meter_id}",
+                "meterID": meter_id,
+                "startTime": (
+                    event.start_time.isoformat() if event.start_time else ""
+                ),
+                "endTime": (
+                    event.end_time.isoformat() if event.end_time else ""
+                ),
+                "importLimit_kW": m.import_max_kw,
+                "exportLimit_kW": m.export_max_kw,
+                "unit": "kW",
+                "version": "IEC62746-4:2022",
+                "issuerID": "neuralgrid-derms",
+                "status": (
+                    "ACTIVE" if event.status == "DISPATCHED" else "PENDING"
+                ),
+            })
+        return {
+            "protocol": "IEC_62746-4",
+            "event_ref": event.event_ref,
+            "operatingEnvelopes": oes,
+        }
+
+    # ── RAW ───────────────────────────────────────────────────────────────────
+    else:
+        return {
+            "protocol": "RAW",
+            "event_ref": event.event_ref,
+            "messages": [
+                {
+                    "id": m.id,
+                    "asset_id": m.asset_id,
+                    "asset_ref": getattr(
+                        asset_map.get(m.asset_id), "asset_ref", m.asset_id
+                    ),
+                    "direction": m.direction,
+                    "import_max_kw": m.import_max_kw,
+                    "export_max_kw": m.export_max_kw,
+                    "sent_at": m.sent_at.isoformat(),
+                    "ack_received": m.ack_received,
+                    "delivery_channel": m.delivery_channel,
+                }
+                for m in oe_messages
+            ],
+        }
 
 
 @router.post("/{event_id}/cancel")

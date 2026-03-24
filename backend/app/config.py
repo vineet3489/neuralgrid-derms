@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     feeder_loading_max: float = 100.0
     hosting_capacity_warn: float = 85.0
 
+    # Kafka transport (empty = disabled; set KAFKA_BOOTSTRAP_SERVERS to enable)
+    kafka_bootstrap_servers: str = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
+    kafka_security_protocol: str = os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
+    kafka_group_id: str = os.environ.get("KAFKA_GROUP_ID", "neuralgrid-derms")
+
     # Static files (React build output)
     static_dir: str = os.environ.get("STATIC_DIR", "../frontend/dist")
 
