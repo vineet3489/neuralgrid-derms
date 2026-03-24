@@ -56,6 +56,7 @@ def _event_to_dict(e: FlexEvent) -> dict:
         "dispatched_at": e.dispatched_at.isoformat() if e.dispatched_at else None,
         "completed_at": e.completed_at.isoformat() if e.completed_at else None,
         "operator_notes": e.operator_notes,
+        "notes": e.operator_notes,   # alias for frontend compatibility
         "auto_generated": e.auto_generated,
         "asset_ids": json.loads(e.asset_ids) if e.asset_ids else [],
         "doe_values": json.loads(e.doe_values) if e.doe_values else {},

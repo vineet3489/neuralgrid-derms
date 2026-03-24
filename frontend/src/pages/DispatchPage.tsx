@@ -24,6 +24,7 @@ interface CreateEventForm {
   event_type: string
   target_kw: string
   duration_minutes: string
+  start_time: string   // ISO local datetime string from <input type="datetime-local">
   cmz_id: string
   notes: string
 }
@@ -156,10 +157,10 @@ function EventDetailPanel({ event, onClose, onDispatch, onCancel }: EventDetailP
         </div>
 
         {/* Notes */}
-        {event.notes && (
+        {(event as any).operator_notes && (
           <div className="bg-gray-800/50 rounded-lg p-3">
             <div className="text-xs text-gray-500 mb-1">Notes</div>
-            <p className="text-sm text-gray-300">{event.notes}</p>
+            <p className="text-sm text-gray-300">{(event as any).operator_notes}</p>
           </div>
         )}
 
@@ -222,10 +223,17 @@ export default function DispatchPage() {
   const [loading, setLoading] = useState(true)
   const [selectedEvent, setSelectedEvent] = useState<FlexEvent | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  // Default start_time: 5 minutes from now, formatted for datetime-local input
+  const _defaultStart = () => {
+    const d = new Date(Date.now() + 5 * 60 * 1000)
+    return d.toISOString().slice(0, 16)   // "YYYY-MM-DDTHH:MM"
+  }
+
   const [createForm, setCreateForm] = useState<CreateEventForm>({
     event_type: 'CURTAILMENT',
     target_kw: '',
     duration_minutes: '30',
+    start_time: _defaultStart(),
     cmz_id: '',
     notes: '',
   })
@@ -236,7 +244,9 @@ export default function DispatchPage() {
     setLoading(true)
     try {
       const res = await api.events()
-      setEvents(res.data || [])
+      // Backend returns { items: [...], total, offset }
+      const items = Array.isArray(res.data) ? res.data : (res.data?.items ?? [])
+      setEvents(items)
     } catch {
       setEvents([])
     } finally {
@@ -255,13 +265,17 @@ export default function DispatchPage() {
     setCreating(true)
     try {
       const res = await api.createEvent({
-        ...createForm,
+        cmz_id: createForm.cmz_id,
+        event_type: createForm.event_type,
         target_kw: parseFloat(createForm.target_kw),
         duration_minutes: parseInt(createForm.duration_minutes),
+        start_time: new Date(createForm.start_time).toISOString(),
+        operator_notes: createForm.notes || undefined,
+        trigger: 'MANUAL_OPERATOR',
       })
       setEvents((prev) => [res.data, ...prev])
       setShowCreateModal(false)
-      setCreateForm({ event_type: 'CURTAILMENT', target_kw: '', duration_minutes: '30', cmz_id: '', notes: '' })
+      setCreateForm({ event_type: 'CURTAILMENT', target_kw: '', duration_minutes: '30', start_time: _defaultStart(), cmz_id: '', notes: '' })
     } catch {
       alert('Failed to create event.')
     } finally {
@@ -612,6 +626,16 @@ export default function DispatchPage() {
               />
             </div>
             <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">Start Time *</label>
+              <input
+                className="input w-full"
+                type="datetime-local"
+                value={createForm.start_time}
+                onChange={(e) => setCreateForm((p) => ({ ...p, start_time: e.target.value }))}
+                required
+              />
+            </div>
+            <div>
               <label className="block text-xs font-medium text-gray-400 mb-1">Duration (minutes)</label>
               <input
                 className="input w-full"
@@ -623,7 +647,7 @@ export default function DispatchPage() {
                 placeholder="30"
               />
             </div>
-            <div>
+            <div className="col-span-2">
               <label className="block text-xs font-medium text-gray-400 mb-1">CMZ ID</label>
               <input
                 className="input w-full"
