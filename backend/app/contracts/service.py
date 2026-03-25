@@ -551,3 +551,251 @@ async def list_amendments(
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+# ---------------------------------------------------------------------------
+# Demo seed
+# ---------------------------------------------------------------------------
+
+async def seed_demo_contracts(db: AsyncSession) -> None:
+    """
+    Idempotent seed: creates realistic flexibility contracts tied to seeded
+    programs and counterparties for SSEN and PUVVNL deployments.
+    """
+    import json as _json
+    from app.programs.models import Program  # noqa: PLC0415
+    from app.counterparties.models import Counterparty  # noqa: PLC0415
+
+    # Check whether already seeded
+    existing_count_result = await db.execute(
+        select(func.count(Contract.id)).where(
+            Contract.contract_ref.like("CTR-%"),
+            Contract.deleted_at.is_(None),
+        )
+    )
+    if (existing_count_result.scalar_one() or 0) >= 4:
+        return  # Already seeded
+
+    now = utcnow()
+
+    for deployment_id, dep_data in [
+        ("ssen", {
+            "program_names": ["SSEN Winter Peak Reduction 2025-26", "SSEN Dynamic Constraint Management 2026"],
+            "counterparty_names": ["Alpha Flex Ltd", "Western Power Renewables"],
+            "currency": "GBP",
+            "contracts": [
+                {
+                    "contract_ref": "CTR-SSEN-001",
+                    "name": "Alpha Flex — Orkney Peak Reduction 2025-26",
+                    "type": "OPERATIONAL_UTILISATION",
+                    "program_idx": 0,
+                    "counterparty_idx": 0,
+                    "cmz_id": "CMZ-ORKNEY",
+                    "contracted_capacity_kw": 1200.0,
+                    "min_dispatch_kw": 200.0,
+                    "availability_rate_minor": 850,   # 850 pence/kW/day = £8.50/kW/day
+                    "utilisation_rate_minor": 12500,  # 12500 pence/MWh = £125/MWh
+                    "response_time_minutes": 15,
+                    "status": "ACTIVE",
+                    "start_date": "2025-11-01",
+                    "end_date": "2026-03-31",
+                    "signed_date": "2025-10-15",
+                    "baseline_method": "HIGH_5_OF_10",
+                    "settlement_cycle": "MONTHLY",
+                    "doe_clause": True,
+                    "stackable": True,
+                    "max_activations_per_day": 3,
+                    "service_window_config": {
+                        "days": ["MON","TUE","WED","THU","FRI"],
+                        "hours": {"start": "17:00", "end": "21:00"},
+                        "tz": "Europe/London",
+                    },
+                },
+                {
+                    "contract_ref": "CTR-SSEN-002",
+                    "name": "Western Power — Shetland BESS Dynamic Constraint",
+                    "type": "DYNAMIC_CONSTRAINT",
+                    "program_idx": 1,
+                    "counterparty_idx": 1,
+                    "cmz_id": "CMZ-SHETLAND",
+                    "contracted_capacity_kw": 2000.0,
+                    "min_dispatch_kw": 500.0,
+                    "availability_rate_minor": 700,   # 700 pence/kW/day
+                    "utilisation_rate_minor": 9500,   # £95/MWh
+                    "response_time_minutes": 5,
+                    "status": "ACTIVE",
+                    "start_date": "2026-01-01",
+                    "end_date": "2026-12-31",
+                    "signed_date": "2025-12-10",
+                    "baseline_method": "SMART_BASELINE",
+                    "settlement_cycle": "MONTHLY",
+                    "doe_clause": True,
+                    "stackable": False,
+                    "max_activations_per_day": 10,
+                    "service_window_config": None,    # Any time
+                },
+                {
+                    "contract_ref": "CTR-SSEN-003",
+                    "name": "Alpha Flex — Orkney V1G Scheduled Utilisation",
+                    "type": "SCHEDULED_UTILISATION",
+                    "program_idx": 0,
+                    "counterparty_idx": 0,
+                    "cmz_id": "CMZ-ORKNEY",
+                    "contracted_capacity_kw": 350.0,
+                    "min_dispatch_kw": 50.0,
+                    "availability_rate_minor": 400,
+                    "utilisation_rate_minor": 8000,
+                    "response_time_minutes": 30,
+                    "status": "PENDING_SIGNATURE",
+                    "start_date": "2026-04-01",
+                    "end_date": "2027-03-31",
+                    "signed_date": None,
+                    "baseline_method": "AVG_5_OF_10",
+                    "settlement_cycle": "MONTHLY",
+                    "doe_clause": False,
+                    "stackable": True,
+                    "max_activations_per_day": 2,
+                    "service_window_config": {
+                        "days": ["SAT","SUN"],
+                        "hours": {"start": "10:00", "end": "16:00"},
+                        "tz": "Europe/London",
+                    },
+                },
+            ],
+        }),
+        ("puvvnl", {
+            "program_names": ["PUVVNL Demand Response Pilot 2025", "PM Surya Ghar P2P Trading Program"],
+            "counterparty_names": ["GMR Energy Services", "PM Surya Ghar Group"],
+            "currency": "INR",
+            "contracts": [
+                {
+                    "contract_ref": "CTR-PUV-001",
+                    "name": "GMR Energy — Varanasi Industrial DR Pilot",
+                    "type": "DEMAND_RESPONSE",
+                    "program_idx": 0,
+                    "counterparty_idx": 0,
+                    "cmz_id": "CMZ-VARANASI-NORTH",
+                    "contracted_capacity_kw": 600.0,
+                    "min_dispatch_kw": 100.0,
+                    "availability_rate_minor": 15000,   # ₹150/kW/day in paise
+                    "utilisation_rate_minor": 450000,   # ₹4,500/MWh in paise
+                    "response_time_minutes": 20,
+                    "status": "ACTIVE",
+                    "start_date": "2025-04-01",
+                    "end_date": "2026-03-31",
+                    "signed_date": "2025-03-20",
+                    "baseline_method": "HIGH_5_OF_10",
+                    "settlement_cycle": "MONTHLY",
+                    "doe_clause": True,
+                    "stackable": True,
+                    "max_activations_per_day": 4,
+                    "service_window_config": {
+                        "days": ["MON","TUE","WED","THU","FRI"],
+                        "hours": {"start": "13:00", "end": "17:00"},
+                        "tz": "Asia/Kolkata",
+                    },
+                },
+                {
+                    "contract_ref": "CTR-PUV-002",
+                    "name": "PM Surya Ghar — BHU Campus P2P Solar",
+                    "type": "P2P",
+                    "program_idx": 1,
+                    "counterparty_idx": 1,
+                    "cmz_id": "CMZ-VARANASI-SOUTH",
+                    "contracted_capacity_kw": 175.0,
+                    "min_dispatch_kw": 25.0,
+                    "availability_rate_minor": 5000,
+                    "utilisation_rate_minor": 180000,
+                    "response_time_minutes": 15,
+                    "status": "ACTIVE",
+                    "start_date": "2025-04-01",
+                    "end_date": "2026-03-31",
+                    "signed_date": "2025-03-28",
+                    "baseline_method": "METERED_BASELINE",
+                    "settlement_cycle": "MONTHLY",
+                    "doe_clause": False,
+                    "stackable": False,
+                    "max_activations_per_day": None,
+                    "service_window_config": None,
+                },
+            ],
+        }),
+    ]:
+        # Look up program IDs
+        prog_result = await db.execute(
+            select(Program).where(
+                Program.deployment_id == deployment_id,
+                Program.deleted_at.is_(None),
+            ).order_by(Program.created_at)
+        )
+        programs = list(prog_result.scalars().all())
+
+        # Look up counterparty IDs
+        cp_result = await db.execute(
+            select(Counterparty).where(
+                Counterparty.deployment_id == deployment_id,
+                Counterparty.deleted_at.is_(None),
+            )
+        )
+        cps = {cp.name: cp.id for cp in cp_result.scalars().all()}
+        cp_names = dep_data["counterparty_names"]
+
+        for c in dep_data["contracts"]:
+            # Skip if already exists
+            dup = await db.execute(
+                select(Contract).where(
+                    Contract.contract_ref == c["contract_ref"],
+                    Contract.deployment_id == deployment_id,
+                )
+            )
+            if dup.scalar_one_or_none():
+                continue
+
+            prog_idx = c["program_idx"]
+            if prog_idx >= len(programs):
+                continue  # Programs not seeded yet
+            program_id = programs[prog_idx].id
+
+            cp_name = cp_names[c["counterparty_idx"]]
+            cp_id = cps.get(cp_name)
+            if not cp_id:
+                cp_id = next(iter(cps.values()), None)
+            if not cp_id:
+                continue
+
+            svc_window = c.get("service_window_config")
+            contract = Contract(
+                id=new_uuid(),
+                deployment_id=deployment_id,
+                program_id=program_id,
+                counterparty_id=cp_id,
+                contract_ref=c["contract_ref"],
+                name=c["name"],
+                type=c["type"],
+                status=c["status"],
+                cmz_id=c["cmz_id"],
+                contracted_capacity_kw=c["contracted_capacity_kw"],
+                min_dispatch_kw=c.get("min_dispatch_kw"),
+                availability_rate_minor=c["availability_rate_minor"],
+                utilisation_rate_minor=c["utilisation_rate_minor"],
+                penalty_multiplier=3.0,
+                grace_factor_pct=5.0,
+                response_time_minutes=c["response_time_minutes"],
+                baseline_method=c["baseline_method"],
+                doe_clause=c["doe_clause"],
+                stackable=c["stackable"],
+                max_activations_per_day=c.get("max_activations_per_day"),
+                min_rest_hours=2.0,
+                measurement_source="AMI_MDMS",
+                settlement_cycle=c["settlement_cycle"],
+                start_date=c["start_date"],
+                end_date=c["end_date"],
+                signed_date=c.get("signed_date"),
+                service_window_config=_json.dumps(svc_window) if svc_window else None,
+                created_by="system",
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(contract)
+
+    await db.flush()

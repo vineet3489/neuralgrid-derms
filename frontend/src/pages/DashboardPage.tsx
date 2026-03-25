@@ -7,6 +7,7 @@ import {
   TrendingUp,
   RefreshCw,
   CheckCircle2,
+  ShieldAlert,
 } from 'lucide-react'
 import { useGridStore } from '../stores/gridStore'
 import { useAuthStore } from '../stores/authStore'
@@ -225,6 +226,77 @@ export default function DashboardPage() {
         </div>
         <EnergyFlowChart solarData={solarData} loadData={loadData} height={240} />
       </div>
+
+      {/* Constraint Violations Panel */}
+      {(() => {
+        const overloadedNodes = (gs?.nodes || []).filter((n) => n.current_loading_pct > 75)
+        const overloadedAssets = (gs?.assets || []).filter(
+          (a) => a.doe_export_max_kw != null && a.current_kw < 0 && Math.abs(a.current_kw) > a.doe_export_max_kw * 1.05
+        )
+        const violations = [
+          ...overloadedNodes.map((n) => ({
+            id: n.node_id,
+            type: n.current_loading_pct >= 100 ? 'CRITICAL' : 'WARNING',
+            label: n.name,
+            detail: `${n.node_type === 'FEEDER' ? 'Feeder' : 'DT'} loading ${n.current_loading_pct?.toFixed(0)}%`,
+            limit: '≤75%',
+          })),
+          ...overloadedAssets.map((a) => ({
+            id: a.id,
+            type: 'WARNING',
+            label: a.name,
+            detail: `Export ${Math.abs(a.current_kw).toFixed(0)} kW exceeds DOE limit ${a.doe_export_max_kw?.toFixed(0)} kW`,
+            limit: `${a.doe_export_max_kw?.toFixed(0)} kW`,
+          })),
+        ]
+        if (violations.length === 0) return null
+        return (
+          <div className="card border-amber-700/40 bg-amber-950/10">
+            <div className="flex items-center gap-2 mb-3">
+              <ShieldAlert className="w-4 h-4 text-amber-400" />
+              <h2 className="text-sm font-semibold text-amber-300">
+                Constraint Violations ({violations.length})
+              </h2>
+              <span className="ml-auto text-xs text-gray-500">
+                {violations.filter((v) => v.type === 'CRITICAL').length} critical ·{' '}
+                {violations.filter((v) => v.type === 'WARNING').length} warning
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-500 border-b border-gray-700">
+                    <th className="text-left pb-2 font-medium">Severity</th>
+                    <th className="text-left pb-2 font-medium">Node / Asset</th>
+                    <th className="text-left pb-2 font-medium">Violation</th>
+                    <th className="text-left pb-2 font-medium">Limit</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800">
+                  {violations.map((v) => (
+                    <tr key={v.id} className="py-1">
+                      <td className="py-2 pr-4">
+                        <span
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                            v.type === 'CRITICAL'
+                              ? 'bg-red-900/40 text-red-400'
+                              : 'bg-amber-900/40 text-amber-400'
+                          }`}
+                        >
+                          {v.type}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-4 text-gray-300 font-medium">{v.label}</td>
+                      <td className="py-2 pr-4 text-gray-400">{v.detail}</td>
+                      <td className="py-2 text-gray-500">{v.limit}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Node summary strip */}
       {gs?.nodes && gs.nodes.length > 0 && (

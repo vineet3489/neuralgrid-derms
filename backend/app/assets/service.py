@@ -334,20 +334,12 @@ async def get_doe_history(
 
 async def seed_demo_assets(db: AsyncSession, deployment_id: str) -> None:
     """
-    Seed digital twin DER assets for a given deployment. Idempotent.
+    Seed digital twin DER assets for a given deployment. Upserts by asset_ref so
+    capacity values are updated on re-deploy.
 
-    SSEN: 15 assets across 3 CMZs.
-    PUVVNL: 10 assets.
+    SSEN: 20 assets across 3 CMZs (island-scale: MW-class BESS, wind, commercial EV).
+    PUVVNL: 13 assets (community PV, grid BESS, industrial loads).
     """
-    stmt = select(func.count(DERAsset.id)).where(
-        DERAsset.deployment_id == deployment_id,
-        DERAsset.created_by == "system",
-        DERAsset.deleted_at.is_(None),
-    )
-    result = await db.execute(stmt)
-    if (result.scalar_one() or 0) > 0:
-        return  # Already seeded
-
     # We need to look up counterparty IDs seeded by seed_counterparties
     from app.counterparties.models import Counterparty  # noqa: PLC0415
 
@@ -358,67 +350,102 @@ async def seed_demo_assets(db: AsyncSession, deployment_id: str) -> None:
     cp_result = await db.execute(cp_stmt)
     counterparties = {cp.name: cp.id for cp in cp_result.scalars().all()}
 
+    # Fetch existing refs so we can upsert
+    existing_stmt = select(DERAsset).where(
+        DERAsset.deployment_id == deployment_id,
+        DERAsset.created_by == "system",
+        DERAsset.deleted_at.is_(None),
+    )
+    existing_result = await db.execute(existing_stmt)
+    existing_by_ref: dict[str, DERAsset] = {a.asset_ref: a for a in existing_result.scalars().all()}
+
     now = utcnow()
 
     if deployment_id == "ssen":
-        # ---- SSEN: 15 assets across CMZ-ORKNEY, CMZ-SHETLAND, CMZ-HIGHLAND ----
+        # ---- SSEN: 20 assets — island-scale (Orkney / Shetland / Highland) ----
         agg_id = counterparties.get("Alpha Flex Ltd", list(counterparties.values())[0] if counterparties else "unknown")
         wpr_id = counterparties.get("Western Power Renewables", agg_id)
         hhc_id = counterparties.get("Highland Homes Community", agg_id)
 
         assets = [
-            # 5x V1G chargers (7kW each) — CMZ-ORKNEY
-            _make_asset("AST-001", "Kirkwall EV Hub — Charger 1",       AssetType.V1G,       7.0,   None, agg_id, "ssen", "CMZ-ORKNEY",   "FDR-01", "DT-001", 58.981, -2.960),
-            _make_asset("AST-002", "Kirkwall EV Hub — Charger 2",       AssetType.V1G,       7.0,   None, agg_id, "ssen", "CMZ-ORKNEY",   "FDR-01", "DT-001", 58.982, -2.961),
-            _make_asset("AST-003", "St Ola Depot — EV Fleet Charger",   AssetType.V1G,       7.0,   None, agg_id, "ssen", "CMZ-ORKNEY",   "FDR-02", "DT-002", 58.957, -2.922),
-            _make_asset("AST-004", "Stromness Quay — V1G Unit",         AssetType.V1G,       7.0,   None, agg_id, "ssen", "CMZ-ORKNEY",   "FDR-02", "DT-002", 58.963, -3.299),
-            _make_asset("AST-005", "Finstown Car Park — EV Charger",    AssetType.V1G,       7.0,   None, agg_id, "ssen", "CMZ-ORKNEY",   "FDR-03", "DT-003", 59.021, -3.063),
-            # 3x V2G (22kW) — CMZ-SHETLAND
-            _make_asset("AST-006", "Lerwick Ferry Terminal — V2G",      AssetType.V2G,       22.0,  None, wpr_id, "ssen", "CMZ-SHETLAND", "FDR-04", "DT-004", 60.155, -1.148),
-            _make_asset("AST-007", "Scalloway Harbour — V2G",           AssetType.V2G,       22.0,  None, wpr_id, "ssen", "CMZ-SHETLAND", "FDR-04", "DT-004", 60.134, -1.275),
-            _make_asset("AST-008", "Brae Industrial — V2G Depot",       AssetType.V2G,       22.0,  None, wpr_id, "ssen", "CMZ-SHETLAND", "FDR-05", "DT-005", 60.389, -1.353),
-            # 4x BESS (10kW / 20kWh) — split CMZ-ORKNEY + CMZ-SHETLAND
-            _make_asset("AST-009", "Orkney Grid BESS Alpha",            AssetType.BESS,      10.0,  20.0, agg_id, "ssen", "CMZ-ORKNEY",   "FDR-01", "DT-006", 58.990, -2.975, soc=75.0),
-            _make_asset("AST-010", "Orkney Grid BESS Beta",             AssetType.BESS,      10.0,  20.0, agg_id, "ssen", "CMZ-ORKNEY",   "FDR-03", "DT-007", 59.015, -3.100, soc=60.0),
-            _make_asset("AST-011", "Shetland BESS East Lerwick",        AssetType.BESS,      10.0,  20.0, wpr_id, "ssen", "CMZ-SHETLAND", "FDR-04", "DT-008", 60.161, -1.140, soc=80.0),
-            _make_asset("AST-012", "Shetland BESS Scalloway",           AssetType.BESS,      10.0,  20.0, wpr_id, "ssen", "CMZ-SHETLAND", "FDR-05", "DT-009", 60.138, -1.280, soc=55.0),
-            # 2x Heat Pump (5kW) — CMZ-HIGHLAND
-            _make_asset("AST-013", "Inverness Housing — Heat Pump A",   AssetType.HEAT_PUMP, 5.0,   None, hhc_id, "ssen", "CMZ-HIGHLAND", "FDR-06", "DT-010", 57.478, -4.225),
-            _make_asset("AST-014", "Inverness Housing — Heat Pump B",   AssetType.HEAT_PUMP, 5.0,   None, hhc_id, "ssen", "CMZ-HIGHLAND", "FDR-06", "DT-010", 57.479, -4.227),
-            # 1x Commercial PV (50kW)
-            _make_asset("AST-015", "Inverness Retail Park — PV Array",  AssetType.PV,        50.0,  None, hhc_id, "ssen", "CMZ-HIGHLAND", "FDR-07", "DT-011", 57.475, -4.210),
+            # 5x EV / V1G — Kirkwall rapid hubs (50 kW each)
+            _make_asset("AST-001", "Kirkwall EV Hub — Rapid Charger 1",  AssetType.V1G,       50.0,  None,    agg_id, "ssen", "CMZ-ORKNEY",   "FDR-ORKNEY-1", "DT-ORK-001", 58.981, -2.960),
+            _make_asset("AST-002", "Kirkwall EV Hub — Rapid Charger 2",  AssetType.V1G,       50.0,  None,    agg_id, "ssen", "CMZ-ORKNEY",   "FDR-ORKNEY-1", "DT-ORK-001", 58.982, -2.961),
+            _make_asset("AST-003", "St Ola Depot — EV Fleet Hub",        AssetType.V1G,       75.0,  None,    agg_id, "ssen", "CMZ-ORKNEY",   "FDR-ORKNEY-1", "DT-ORK-002", 58.957, -2.922),
+            _make_asset("AST-004", "Stromness Ferry Quay — V1G",         AssetType.V1G,       50.0,  None,    agg_id, "ssen", "CMZ-ORKNEY",   "FDR-ORKNEY-1", "DT-ORK-002", 58.963, -3.299),
+            _make_asset("AST-005", "Finstown Community Car Park EV",     AssetType.V1G,       22.0,  None,    agg_id, "ssen", "CMZ-ORKNEY",   "FDR-ORKNEY-1", "DT-ORK-001", 59.021, -3.063),
+            # 3x V2G — Lerwick / Shetland commercial (100 kW each)
+            _make_asset("AST-006", "Lerwick Ferry Terminal — V2G Hub",   AssetType.V2G,       100.0, None,    wpr_id, "ssen", "CMZ-SHETLAND", "FDR-SHET-1", "DT-SHET-001", 60.155, -1.148),
+            _make_asset("AST-007", "Scalloway Harbour — V2G Depot",      AssetType.V2G,       100.0, None,    wpr_id, "ssen", "CMZ-SHETLAND", "FDR-SHET-1", "DT-SHET-003", 60.134, -1.275),
+            _make_asset("AST-008", "Brae Industrial — V2G Fleet",        AssetType.V2G,       150.0, None,    wpr_id, "ssen", "CMZ-SHETLAND", "FDR-SHET-1", "DT-SHET-002", 60.389, -1.353),
+            # 4x Island BESS — Orkney 2× 500kW/1MWh, Shetland 2× 1MW/2MWh
+            _make_asset("AST-009", "Orkney Grid Battery — Alpha",        AssetType.BESS,      500.0, 1000.0,  agg_id, "ssen", "CMZ-ORKNEY",   "FDR-ORKNEY-1", "DT-ORK-001", 58.990, -2.975, soc=75.0),
+            _make_asset("AST-010", "Orkney Grid Battery — Beta",         AssetType.BESS,      500.0, 1000.0,  agg_id, "ssen", "CMZ-ORKNEY",   "FDR-ORKNEY-1", "DT-ORK-002", 59.015, -3.100, soc=60.0),
+            _make_asset("AST-011", "Shetland BESS — Lerwick North",      AssetType.BESS,      1000.0,2000.0,  wpr_id, "ssen", "CMZ-SHETLAND", "FDR-SHET-1", "DT-SHET-001", 60.161, -1.140, soc=80.0),
+            _make_asset("AST-012", "Shetland BESS — Scalloway",          AssetType.BESS,      1000.0,2000.0,  wpr_id, "ssen", "CMZ-SHETLAND", "FDR-SHET-2", "DT-SHET-004", 60.138, -1.280, soc=55.0),
+            # 2x District Heat Pump (150 kW) — Inverness housing estates
+            _make_asset("AST-013", "Inverness Crown Estate — Heat Pump", AssetType.HEAT_PUMP, 150.0, None,    hhc_id, "ssen", "CMZ-SHETLAND", "FDR-SHET-1", "DT-SHET-003", 57.478, -4.225),
+            _make_asset("AST-014", "Inverness Raigmore — Heat Pump",     AssetType.HEAT_PUMP, 150.0, None,    hhc_id, "ssen", "CMZ-SHETLAND", "FDR-SHET-1", "DT-SHET-003", 57.479, -4.227),
+            # 1x Large Commercial PV (400 kW)
+            _make_asset("AST-015", "Inverness Retail Park — PV Farm",    AssetType.PV,        400.0, None,    hhc_id, "ssen", "CMZ-SHETLAND", "FDR-SHET-2", "DT-SHET-004", 57.475, -4.210),
+            # 2x Community Wind Turbines — Orkney & Shetland (750 kW each)
+            _make_asset("AST-016", "Orkney Community Wind Turbine 1",    AssetType.WIND,      750.0, None,    wpr_id, "ssen", "CMZ-ORKNEY",   "FDR-ORKNEY-1", "DT-ORK-001", 58.971, -2.983),
+            _make_asset("AST-017", "Shetland Wind — Sandwick Farm",      AssetType.WIND,      750.0, None,    wpr_id, "ssen", "CMZ-SHETLAND", "FDR-SHET-2", "DT-SHET-004", 59.991, -1.322),
+            # 2x Industrial Load — Lerwick Fish Processing + Harbour
+            _make_asset("AST-018", "Lerwick Fish Processing Plant",      AssetType.INDUSTRIAL_LOAD, 350.0, None, wpr_id, "ssen", "CMZ-SHETLAND", "FDR-SHET-1", "DT-SHET-002", 60.152, -1.145),
+            _make_asset("AST-019", "Kirkwall Harbour Industrial Load",   AssetType.INDUSTRIAL_LOAD, 280.0, None, agg_id, "ssen", "CMZ-ORKNEY",   "FDR-ORKNEY-1", "DT-ORK-002", 58.978, -2.965),
+            # 1x Residential Aggregation — Orkney DSR group (200 kW flexible)
+            _make_asset("AST-020", "Orkney Residential DSR Aggregation", AssetType.RESIDENTIAL_LOAD, 200.0, None, agg_id, "ssen", "CMZ-ORKNEY", "FDR-ORKNEY-1", "DT-ORK-001", 58.986, -2.971),
         ]
 
     elif deployment_id == "puvvnl":
-        # ---- PUVVNL: 10 assets ----
+        # ---- PUVVNL: 13 assets — Varanasi distribution network ----
         gmr_id = counterparties.get("GMR Energy Services", list(counterparties.values())[0] if counterparties else "unknown")
         vsi_id = counterparties.get("Varanasi Smart Industries", gmr_id)
         psg_id = counterparties.get("PM Surya Ghar Group", gmr_id)
 
         assets = [
-            # 7x PV rooftop (3-10kW)
-            _make_asset("AST-101", "Shivpur Rooftop PV — 1",            AssetType.PV, 3.0,  None, psg_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-11", "DT-101", 25.332, 82.973),
-            _make_asset("AST-102", "Shivpur Rooftop PV — 2",            AssetType.PV, 3.0,  None, psg_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-11", "DT-101", 25.334, 82.975),
-            _make_asset("AST-103", "Sigra Colony PV Array",              AssetType.PV, 5.0,  None, psg_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-12", "DT-102", 25.325, 82.978),
-            _make_asset("AST-104", "Lanka Rooftop PV",                   AssetType.PV, 3.5,  None, psg_id, "puvvnl", "CMZ-VARANASI-SOUTH", "FDR-13", "DT-103", 25.270, 82.985),
-            _make_asset("AST-105", "BHU Campus PV — Block A",            AssetType.PV, 10.0, None, gmr_id, "puvvnl", "CMZ-VARANASI-SOUTH", "FDR-14", "DT-104", 25.268, 82.988),
-            _make_asset("AST-106", "BHU Campus PV — Block B",            AssetType.PV, 10.0, None, gmr_id, "puvvnl", "CMZ-VARANASI-SOUTH", "FDR-14", "DT-104", 25.267, 82.987),
-            _make_asset("AST-107", "Sarnath Industrial PV",              AssetType.PV, 7.5,  None, vsi_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-15", "DT-105", 25.381, 83.024),
-            # 2x BESS (5kW / 10kWh)
-            _make_asset("AST-108", "Shivpur Community BESS",             AssetType.BESS, 5.0, 10.0, gmr_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-11", "DT-106", 25.335, 82.974, soc=70.0),
-            _make_asset("AST-109", "Lanka BESS Unit",                    AssetType.BESS, 5.0, 10.0, gmr_id, "puvvnl", "CMZ-VARANASI-SOUTH", "FDR-13", "DT-107", 25.271, 82.984, soc=50.0),
-            # 1x EV charger
-            _make_asset("AST-110", "Varanasi Junction EV Charger",       AssetType.V1G,  7.4, None, vsi_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-12", "DT-108", 25.318, 82.993),
+            # 7x PM Surya Ghar community PV (25–100 kW)
+            _make_asset("AST-101", "Shivpur Housing Colony PV",          AssetType.PV, 25.0,  None,  psg_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-VAR-01", "DT-VAR-001", 25.332, 82.973),
+            _make_asset("AST-102", "Sigra Rooftop Cluster PV",           AssetType.PV, 30.0,  None,  psg_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-VAR-01", "DT-VAR-001", 25.334, 82.975),
+            _make_asset("AST-103", "Orderly Market PV Array",            AssetType.PV, 50.0,  None,  psg_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-VAR-01", "DT-VAR-002", 25.325, 82.978),
+            _make_asset("AST-104", "Lanka Student Zone PV",              AssetType.PV, 25.0,  None,  psg_id, "puvvnl", "CMZ-VARANASI-SOUTH", "FDR-VAR-02", "DT-VAR-003", 25.270, 82.985),
+            _make_asset("AST-105", "BHU Campus PV — Block A",            AssetType.PV, 75.0,  None,  gmr_id, "puvvnl", "CMZ-VARANASI-SOUTH", "FDR-VAR-02", "DT-VAR-004", 25.268, 82.988),
+            _make_asset("AST-106", "BHU Campus PV — Block B",            AssetType.PV, 75.0,  None,  gmr_id, "puvvnl", "CMZ-VARANASI-SOUTH", "FDR-VAR-02", "DT-VAR-004", 25.267, 82.987),
+            _make_asset("AST-107", "Sarnath Industrial Rooftop PV",      AssetType.PV, 100.0, None,  vsi_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-VAR-01", "DT-VAR-002", 25.381, 83.024),
+            # 2x Grid BESS (100 kW / 200 kWh)
+            _make_asset("AST-108", "Shivpur Grid Battery",               AssetType.BESS, 100.0, 200.0, gmr_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-VAR-01", "DT-VAR-001", 25.335, 82.974, soc=70.0),
+            _make_asset("AST-109", "Lanka Grid Battery",                 AssetType.BESS, 100.0, 200.0, gmr_id, "puvvnl", "CMZ-VARANASI-SOUTH", "FDR-VAR-02", "DT-VAR-003", 25.271, 82.984, soc=50.0),
+            # 1x EV charger hub (50 kW)
+            _make_asset("AST-110", "Varanasi Junction EV Hub",           AssetType.V1G, 50.0,  None,  vsi_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-VAR-01", "DT-VAR-002", 25.318, 82.993),
+            # 2x Industrial load (DSR capable)
+            _make_asset("AST-111", "Sarnath Steel Works — DSR Load",     AssetType.INDUSTRIAL_LOAD, 500.0, None, vsi_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-VAR-01", "DT-VAR-002", 25.378, 83.019),
+            _make_asset("AST-112", "BHU Central Utility Load",           AssetType.INDUSTRIAL_LOAD, 300.0, None, gmr_id, "puvvnl", "CMZ-VARANASI-SOUTH", "FDR-VAR-02", "DT-VAR-004", 25.265, 82.991),
+            # 1x Residential aggregation
+            _make_asset("AST-113", "Varanasi North Residential DSR",     AssetType.RESIDENTIAL_LOAD, 150.0, None, psg_id, "puvvnl", "CMZ-VARANASI-NORTH", "FDR-VAR-01", "DT-VAR-001", 25.330, 82.970),
         ]
 
     else:
         return  # Unknown deployment
 
     for asset_row in assets:
-        asset_row.created_by = "system"
-        asset_row.created_at = now
-        asset_row.updated_at = now
-        db.add(asset_row)
+        existing = existing_by_ref.get(asset_row.asset_ref)
+        if existing is not None:
+            # Upsert: update capacity so production data is refreshed
+            existing.capacity_kw = asset_row.capacity_kw
+            existing.capacity_kwh = asset_row.capacity_kwh
+            existing.doe_import_max_kw = asset_row.doe_import_max_kw
+            existing.doe_export_max_kw = asset_row.doe_export_max_kw
+            existing.hosting_capacity_kw = asset_row.hosting_capacity_kw
+            existing.name = asset_row.name
+            existing.feeder_id = asset_row.feeder_id
+            existing.dt_id = asset_row.dt_id
+            existing.updated_at = now
+        else:
+            asset_row.created_by = "system"
+            asset_row.created_at = now
+            asset_row.updated_at = now
+            db.add(asset_row)
 
     await db.flush()
 

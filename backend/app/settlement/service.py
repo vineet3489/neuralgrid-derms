@@ -216,3 +216,141 @@ async def approve_settlement(
         pass
 
     return stmt
+
+
+# ---------------------------------------------------------------------------
+# Demo seed
+# ---------------------------------------------------------------------------
+
+async def seed_demo_settlements(db: AsyncSession) -> None:
+    """
+    Idempotent seed: creates realistic historical settlement statements for
+    seeded contracts, covering the last 4 months.
+    """
+    from sqlalchemy import func  # noqa: PLC0415
+    from app.contracts.models import Contract, ContractStatus  # noqa: PLC0415
+    from app.core.utils import new_uuid, utcnow  # noqa: PLC0415
+
+    # Skip if already seeded
+    existing_count = await db.execute(
+        select(func.count(SettlementStatement.id))
+    )
+    if (existing_count.scalar_one() or 0) >= 6:
+        return
+
+    # Fetch active contracts to attach settlements to
+    contracts_result = await db.execute(
+        select(Contract).where(
+            Contract.status == ContractStatus.ACTIVE.value,
+            Contract.deleted_at.is_(None),
+        ).order_by(Contract.created_at)
+    )
+    contracts = list(contracts_result.scalars().all())
+    if not contracts:
+        return
+
+    now = utcnow()
+    # Historical months: Nov-25, Dec-25, Jan-26, Feb-26
+    months = [
+        ("2025-11-01", "2025-11-30", "APPROVED"),
+        ("2025-12-01", "2025-12-31", "PAID"),
+        ("2026-01-01", "2026-01-31", "APPROVED"),
+        ("2026-02-01", "2026-02-28", "PENDING_APPROVAL"),
+    ]
+
+    # Realistic settlement data per contract type
+    contract_scenarios = {
+        "CTR-SSEN-001": {
+            "currency": "GBP",
+            "events_per_month": [8, 12, 7, 9],
+            "delivered_kwh_per_event": 960.0,   # 1200kW × 0.8 delivery × 1h
+            "missed_kwh_per_event": 60.0,
+            "avail_hours": 480.0,               # ~20 service days × 4h window × 6 months overlap
+        },
+        "CTR-SSEN-002": {
+            "currency": "GBP",
+            "events_per_month": [3, 5, 4, 6],
+            "delivered_kwh_per_event": 1800.0,  # 2000kW × 0.9 × 1h
+            "missed_kwh_per_event": 80.0,
+            "avail_hours": 720.0,               # Always-available
+        },
+        "CTR-PUV-001": {
+            "currency": "INR",
+            "events_per_month": [6, 8, 10, 7],
+            "delivered_kwh_per_event": 480.0,   # 600kW × 0.8 × 1h
+            "missed_kwh_per_event": 40.0,
+            "avail_hours": 400.0,
+        },
+        "CTR-PUV-002": {
+            "currency": "INR",
+            "events_per_month": [20, 22, 18, 25],
+            "delivered_kwh_per_event": 52.5,    # P2P ongoing trading
+            "missed_kwh_per_event": 2.5,
+            "avail_hours": 600.0,
+        },
+    }
+
+    for contract in contracts:
+        scenario = contract_scenarios.get(contract.contract_ref)
+        if not scenario:
+            continue
+
+        for i, (period_start_s, period_end_s, stmt_status) in enumerate(months):
+            period_start = datetime.fromisoformat(period_start_s).replace(tzinfo=timezone.utc)
+            period_end = datetime.fromisoformat(period_end_s).replace(tzinfo=timezone.utc)
+
+            # Skip periods before contract start_date
+            if period_end_s < contract.start_date:
+                continue
+
+            dup = await db.execute(
+                select(SettlementStatement).where(
+                    SettlementStatement.contract_id == contract.id,
+                    SettlementStatement.period_start == period_start,
+                )
+            )
+            if dup.scalar_one_or_none():
+                continue
+
+            events = scenario["events_per_month"][i]
+            delivered_kwh = round(events * scenario["delivered_kwh_per_event"] * random.uniform(0.88, 1.05), 1)
+            missed_kwh = round(events * scenario["missed_kwh_per_event"] * random.uniform(0.5, 1.2), 1)
+            avail_hours = scenario["avail_hours"]
+
+            avail_payment = int(avail_hours * contract.availability_rate_minor)
+            util_payment = int((delivered_kwh / 1000.0) * contract.utilisation_rate_minor)
+            penalty = int((missed_kwh / 1000.0) * contract.utilisation_rate_minor * contract.penalty_multiplier)
+            gross = avail_payment + util_payment
+            net = gross - penalty
+
+            avg_delivery = round(delivered_kwh / max(1, events * scenario["delivered_kwh_per_event"]) * 100, 1)
+
+            stmt_obj = SettlementStatement(
+                id=new_uuid(),
+                deployment_id=contract.deployment_id,
+                contract_id=contract.id,
+                period_start=period_start,
+                period_end=period_end,
+                status=stmt_status,
+                availability_hours=avail_hours,
+                availability_rate_minor=contract.availability_rate_minor,
+                availability_payment_minor=avail_payment,
+                delivered_kwh=delivered_kwh,
+                utilisation_rate_minor=contract.utilisation_rate_minor,
+                utilisation_payment_minor=util_payment,
+                missed_kwh=missed_kwh,
+                penalty_amount_minor=penalty,
+                gross_payment_minor=gross,
+                net_payment_minor=net,
+                currency_code=scenario["currency"],
+                events_count=events,
+                avg_delivery_pct=avg_delivery,
+                approved_by="admin@neuralgrid.com" if stmt_status in ("APPROVED", "PAID") else None,
+                approved_at=now if stmt_status in ("APPROVED", "PAID") else None,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(stmt_obj)
+
+    await db.flush()
+

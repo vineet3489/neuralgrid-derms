@@ -272,16 +272,55 @@ export default function LoginPage() {
           </form>
 
           {/* Demo credentials */}
-          <div className="mt-5 p-3 bg-gray-800/50 border border-gray-700/50 rounded-lg">
-            <div className="text-xs font-medium text-gray-400 mb-2">Demo Credentials</div>
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500">Email:</span>
-                <span className="font-mono text-gray-300">admin@neuralgrid.com</span>
+          <div className="mt-5 p-3 bg-gray-800/50 border border-gray-700/50 rounded-lg space-y-3">
+            <div className="text-xs font-medium text-gray-400">Demo Credentials</div>
+
+            {/* Admin */}
+            <div>
+              <div className="text-xs text-indigo-400 font-medium mb-1">Super Admin</div>
+              <div className="space-y-0.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-500">Email:</span>
+                  <span className="font-mono text-gray-300">admin@neuralgrid.com</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-500">Password:</span>
+                  <span className="font-mono text-gray-300">NeuralGrid2026!</span>
+                </div>
               </div>
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500">Password:</span>
-                <span className="font-mono text-gray-300">NeuralGrid2026!</span>
+            </div>
+
+            <div className="border-t border-gray-700/50" />
+
+            {/* SSEN Operator */}
+            <div>
+              <div className="text-xs text-green-400 font-medium mb-1">SSEN Grid Operator</div>
+              <div className="space-y-0.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-500">Email:</span>
+                  <span className="font-mono text-gray-300">ssen-operator@neuralgrid.com</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-500">Password:</span>
+                  <span className="font-mono text-gray-300">SSENOps2026!</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="border-t border-gray-700/50" />
+
+            {/* PUVVNL Operator */}
+            <div>
+              <div className="text-xs text-amber-400 font-medium mb-1">PUVVNL Grid Operator</div>
+              <div className="space-y-0.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-500">Email:</span>
+                  <span className="font-mono text-gray-300">puvvnl-operator@neuralgrid.com</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-500">Password:</span>
+                  <span className="font-mono text-gray-300">PUVVNLOps2026!</span>
+                </div>
               </div>
             </div>
           </div>

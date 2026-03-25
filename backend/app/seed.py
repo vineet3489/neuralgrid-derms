@@ -95,4 +95,20 @@ async def seed_all(db: AsyncSession) -> None:
     except Exception as exc:
         logger.warning("  SCADA endpoints seed skipped: %s", exc)
 
+    # 10. Contracts
+    try:
+        from app.contracts.service import seed_demo_contracts  # noqa: PLC0415
+        await seed_demo_contracts(db)
+        logger.info("  contracts seeded")
+    except Exception as exc:
+        logger.warning("  contracts seed failed: %s", exc)
+
+    # 11. Settlement statements
+    try:
+        from app.settlement.service import seed_demo_settlements  # noqa: PLC0415
+        await seed_demo_settlements(db)
+        logger.info("  settlements seeded")
+    except Exception as exc:
+        logger.warning("  settlements seed failed: %s", exc)
+
     logger.info("seed_all complete.")
