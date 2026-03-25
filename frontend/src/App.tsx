@@ -83,6 +83,14 @@ function AppInit() {
 
   useWebSocket()
 
+  // Ping /health every 10 minutes to prevent Render free-tier cold-start
+  useEffect(() => {
+    const ping = () => fetch(`${import.meta.env.VITE_API_URL || ''}/health`).catch(() => {})
+    ping()
+    const id = setInterval(ping, 10 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [])
+
   useEffect(() => {
     if (!token) return
 

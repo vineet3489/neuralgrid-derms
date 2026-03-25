@@ -5,6 +5,19 @@ import { useAuthStore } from '../stores/authStore'
 import { api } from '../api/client'
 import type { Deployment } from '../types'
 
+// Backend status check — pings /health to detect cold-start state
+async function checkBackendHealth(): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${import.meta.env.VITE_API_URL || ''}/health`,
+      { signal: AbortSignal.timeout(8000) }
+    )
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 export default function LoginPage() {
   const navigate = useNavigate()
   const { token, setToken, setUser, setDeployments, setDeployment, currentDeployment } =
@@ -14,9 +27,16 @@ export default function LoginPage() {
   const [password, setPassword] = useState('NeuralGrid2026!')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [slowWarning, setSlowWarning] = useState('')   // shown after 4s
   const [error, setError] = useState('')
   const [deployments, setLocalDeployments] = useState<Deployment[]>([])
   const [selectedDep, setSelectedDep] = useState(currentDeployment || 'ssen')
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'up' | 'cold'>('checking')
+
+  // Check backend health on mount so users know if it's warming up
+  useEffect(() => {
+    checkBackendHealth().then((ok) => setBackendStatus(ok ? 'up' : 'cold'))
+  }, [])
 
   // Redirect if already logged in
   useEffect(() => {
@@ -72,6 +92,13 @@ export default function LoginPage() {
     }
     setLoading(true)
     setError('')
+    setSlowWarning('')
+
+    // Show progressive messages if backend is slow (cold-start)
+    const t1 = setTimeout(() => setSlowWarning('Waking up the server — this takes ~30s on first load…'), 4000)
+    const t2 = setTimeout(() => setSlowWarning('Still connecting… the server is starting up, please wait.'), 18000)
+    const t3 = setTimeout(() => setSlowWarning('Almost there… if this takes much longer, try refreshing the page.'), 40000)
+
     try {
       setDeployment(selectedDep)
       const res = await api.login(email, password)
@@ -82,10 +109,12 @@ export default function LoginPage() {
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        'Login failed. Check your credentials.'
+        'Login failed. Check credentials or wait for the server to finish starting.'
       setError(msg)
     } finally {
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3)
       setLoading(false)
+      setSlowWarning('')
     }
   }
 
@@ -119,6 +148,22 @@ export default function LoginPage() {
               <div className="h-px w-12 bg-gradient-to-l from-transparent to-indigo-600/50" />
             </div>
           </div>
+
+          {/* Backend status banner */}
+          {backendStatus === 'cold' && (
+            <div className="mb-4 flex items-start gap-2 bg-amber-900/20 border border-amber-700/40 rounded-lg px-3 py-2.5 text-xs text-amber-300">
+              <span className="mt-0.5">⚠️</span>
+              <span>
+                <strong>Server is waking up.</strong> The backend was idle and is restarting — first login may take up to 60 seconds. Please be patient.
+              </span>
+            </div>
+          )}
+          {backendStatus === 'up' && (
+            <div className="mb-4 flex items-center gap-2 bg-green-900/20 border border-green-800/30 rounded-lg px-3 py-2 text-xs text-green-400">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              Server is online
+            </div>
+          )}
 
           {/* Form */}
           <form onSubmit={handleLogin} className="space-y-4">
@@ -216,6 +261,14 @@ export default function LoginPage() {
                 'Sign In'
               )}
             </button>
+
+            {/* Cold-start slow warning */}
+            {slowWarning && (
+              <div className="mt-3 flex items-start gap-2 bg-indigo-900/20 border border-indigo-700/40 rounded-lg px-3 py-2.5 text-xs text-indigo-300">
+                <div className="w-3 h-3 border border-indigo-400/50 border-t-indigo-400 rounded-full animate-spin flex-shrink-0 mt-0.5" />
+                {slowWarning}
+              </div>
+            )}
           </form>
 
           {/* Demo credentials */}
