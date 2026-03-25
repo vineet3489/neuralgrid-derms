@@ -11,7 +11,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import {
   AlertTriangle, CheckCircle2, ChevronRight, Zap, Activity,
   Radio, Send, RefreshCw, Settings, Clock, BarChart3,
-  Network, FileText, ArrowRight, Info,
+  Network, FileText, ArrowRight, Info, Copy, TrendingDown, TrendingUp,
 } from 'lucide-react'
 import { format, addMinutes } from 'date-fns'
 import { api } from '../api/client'
@@ -36,11 +36,33 @@ interface PowerFlowResult {
   violations: Array<{ bus_id: string; voltage_pu: number; type: string }>
 }
 
+interface OESeriesPoint {
+  position: number
+  quantity?: number
+  quantity_import?: number
+  quantity_export?: number
+  quality?: string
+}
+
+interface OESeries {
+  mRID?: string
+  FlowDirection?: { direction: string }
+  Period?: {
+    timeInterval?: { start: string; end: string }
+    resolution?: string
+    Point?: OESeriesPoint[]
+  }
+}
+
 interface OEMessage {
-  MessageDocumentHeader: { messageId: string; messageType: string; timestamp: string }
-  ReferenceEnergyCurveOperatingEnvelope_MarketDocument: {
+  MessageDocumentHeader?: { messageId: string; messageType: string; timestamp: string }
+  ReferenceEnergyCurveOperatingEnvelope_MarketDocument?: {
     mRID: string
-    Series: Array<{ FlowDirection: { direction: string } }>
+    type?: string
+    Series?: OESeries[]
+    period?: {
+      timeInterval?: { start: string; end: string }
+    }
   }
 }
 
@@ -82,6 +104,225 @@ function StepHeader({
         <h2 className="text-sm font-semibold text-gray-100">{title}</h2>
         <p className="text-xs text-gray-500">{subtitle}</p>
       </div>
+    </div>
+  )
+}
+
+// ── Reference Energy Curve View ────────────────────────────────────────────────
+
+function ReferencEnergyCurveView({ oeMessage }: { oeMessage: OEMessage }) {
+  const [copied, setCopied] = useState(false)
+
+  const doc = oeMessage?.ReferenceEnergyCurveOperatingEnvelope_MarketDocument
+  const header = oeMessage?.MessageDocumentHeader
+  const mRID = doc?.mRID ?? header?.messageId ?? '—'
+  const msgType = header?.messageType ?? doc?.type ?? 'ReferenceEnergyCurveOperatingEnvelope'
+
+  // Gather all time slots from all Series with Points
+  interface SlotRow {
+    slotLabel: string
+    importKw: number | null
+    exportKw: number | null
+    quality: string
+  }
+
+  const slots: SlotRow[] = []
+
+  // Collect period info from first series that has one
+  let periodStart: string | null = null
+  let periodEnd: string | null = null
+
+  const seriesList: OESeries[] = doc?.Series ?? []
+
+  // Build import/export maps keyed by position
+  const importMap: Record<number, OESeriesPoint> = {}
+  const exportMap: Record<number, OESeriesPoint> = {}
+  let resolution = 'PT30M'
+  let intervalStart: Date | null = null
+
+  for (const s of seriesList) {
+    const period = s.Period
+    if (!period) continue
+    if (period.timeInterval?.start && !periodStart) {
+      periodStart = period.timeInterval.start
+      periodEnd = period.timeInterval.end ?? null
+      intervalStart = new Date(period.timeInterval.start)
+    }
+    if (period.resolution) resolution = period.resolution
+    const dir = s.FlowDirection?.direction ?? ''
+    const points = period.Point ?? []
+    for (const pt of points) {
+      if (dir === 'A01' || dir === 'import' || dir.toLowerCase().includes('import')) {
+        importMap[pt.position] = pt
+      } else if (dir === 'A02' || dir === 'export' || dir.toLowerCase().includes('export')) {
+        exportMap[pt.position] = pt
+      } else {
+        // No direction — treat quantity as export, quantity_import as import
+        if (pt.quantity_import != null || pt.quantity != null) {
+          importMap[pt.position] = pt
+        }
+        if (pt.quantity_export != null) {
+          exportMap[pt.position] = pt
+        }
+      }
+    }
+  }
+
+  // Determine number of slots
+  const allPositions = new Set([...Object.keys(importMap), ...Object.keys(exportMap)].map(Number))
+  const maxPos = allPositions.size > 0 ? Math.max(...allPositions) : 0
+
+  const resMinutes = resolution === 'PT15M' ? 15 : resolution === 'PT60M' ? 60 : 30
+
+  for (let pos = 1; pos <= (maxPos || 1); pos++) {
+    const imp = importMap[pos]
+    const exp = exportMap[pos]
+    const slotStart = intervalStart ? new Date(intervalStart.getTime() + (pos - 1) * resMinutes * 60000) : null
+    const slotEnd = slotStart ? new Date(slotStart.getTime() + resMinutes * 60000) : null
+    const slotLabel = slotStart && slotEnd
+      ? `${slotStart.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} – ${slotEnd.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
+      : `Slot ${pos}`
+    const importKw = imp?.quantity_import ?? imp?.quantity ?? null
+    const exportKw = exp?.quantity_export ?? exp?.quantity ?? null
+    const quality = imp?.quality ?? exp?.quality ?? '—'
+    slots.push({ slotLabel, importKw, exportKw, quality })
+  }
+
+  // If no structured slots found but raw JSON has data, show compact fallback
+  const hasSlots = slots.length > 0
+
+  const maxImport = slots.reduce((m, s) => Math.max(m, s.importKw ?? 0), 0.001)
+  const maxExport = slots.reduce((m, s) => Math.max(m, s.exportKw ?? 0), 0.001)
+
+  const qualityColor = (q: string) => {
+    if (q === 'A04') return 'text-green-400'
+    if (q === 'A06') return 'text-amber-400'
+    if (q === 'A03') return 'text-red-400'
+    return 'text-gray-500'
+  }
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(JSON.stringify(oeMessage, null, 2)).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Header summary */}
+      <div className="bg-gray-900 border border-gray-700 rounded-lg p-3">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-indigo-400" />
+            <span className="text-xs font-semibold text-gray-200">Reference Energy Curve</span>
+            <span className="text-xs text-green-400 flex items-center gap-1 ml-1">
+              <CheckCircle2 className="w-3 h-3" />
+              Generated
+            </span>
+          </div>
+          <button
+            onClick={handleCopy}
+            className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 bg-gray-800 px-2.5 py-1 rounded-lg transition-colors"
+          >
+            <Copy className="w-3 h-3" />
+            {copied ? 'Copied!' : 'Copy JSON'}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+          <div className="bg-gray-800/60 rounded-lg p-2">
+            <div className="text-gray-500 mb-0.5">mRID</div>
+            <div className="font-mono text-indigo-300 truncate text-[10px]">{mRID}</div>
+          </div>
+          <div className="bg-gray-800/60 rounded-lg p-2">
+            <div className="text-gray-500 mb-0.5">Message Type</div>
+            <div className="text-gray-200 truncate text-[10px]">{msgType}</div>
+          </div>
+          <div className="bg-gray-800/60 rounded-lg p-2">
+            <div className="text-gray-500 mb-0.5">Period Start</div>
+            <div className="font-mono text-gray-200 text-[10px]">
+              {periodStart ? new Date(periodStart).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' }) : '—'}
+            </div>
+          </div>
+          <div className="bg-gray-800/60 rounded-lg p-2">
+            <div className="text-gray-500 mb-0.5">Time Slots</div>
+            <div className="text-gray-200 font-bold">{hasSlots ? slots.length : '—'} × {resMinutes}min</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Time-series table */}
+      {hasSlots ? (
+        <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 border-b border-gray-700 flex items-center gap-2 text-xs">
+            <BarChart3 className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="font-medium text-gray-300">Operating Envelope — Time Series</span>
+            <span className="ml-auto text-gray-500 flex items-center gap-3">
+              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-blue-500 inline-block" /> Import</span>
+              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-green-500 inline-block" /> Export</span>
+            </span>
+          </div>
+          <div className="overflow-y-auto max-h-64">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-800/80">
+                <tr>
+                  <th className="text-left py-2 px-3 text-gray-400 font-medium">Time Slot</th>
+                  <th className="text-right py-2 px-3 text-blue-400 font-medium">Import (kW)</th>
+                  <th className="py-2 px-2 w-32" />
+                  <th className="text-right py-2 px-3 text-green-400 font-medium">Export (kW)</th>
+                  <th className="py-2 px-2 w-32" />
+                  <th className="text-center py-2 px-3 text-gray-400 font-medium">Quality</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-800/60">
+                {slots.map((slot, i) => (
+                  <tr key={i} className="hover:bg-gray-800/30 transition-colors">
+                    <td className="py-2 px-3 font-mono text-gray-300">{slot.slotLabel}</td>
+                    <td className="py-2 px-3 text-right font-mono text-blue-300">
+                      {slot.importKw != null ? slot.importKw.toFixed(1) : '—'}
+                    </td>
+                    <td className="py-1.5 px-2">
+                      {slot.importKw != null && (
+                        <div className="h-3 bg-gray-800 rounded-sm overflow-hidden">
+                          <div
+                            className="h-full bg-blue-500/60 rounded-sm"
+                            style={{ width: `${Math.min((slot.importKw / maxImport) * 100, 100)}%` }}
+                          />
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono text-green-300">
+                      {slot.exportKw != null ? slot.exportKw.toFixed(1) : '—'}
+                    </td>
+                    <td className="py-1.5 px-2">
+                      {slot.exportKw != null && (
+                        <div className="h-3 bg-gray-800 rounded-sm overflow-hidden">
+                          <div
+                            className="h-full bg-green-500/60 rounded-sm"
+                            style={{ width: `${Math.min((slot.exportKw / maxExport) * 100, 100)}%` }}
+                          />
+                        </div>
+                      )}
+                    </td>
+                    <td className={`py-2 px-3 text-center font-mono font-bold text-[10px] ${qualityColor(slot.quality)}`}>
+                      {slot.quality}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        // Fallback: show raw JSON if structure not recognised
+        <div className="bg-gray-900 border border-gray-700 rounded-lg p-3">
+          <p className="text-xs text-gray-500 mb-2">Raw OE message (no time-series structure detected)</p>
+          <pre className="text-xs text-gray-300 font-mono overflow-auto max-h-56 whitespace-pre-wrap">
+            {JSON.stringify(oeMessage, null, 2)}
+          </pre>
+        </div>
+      )}
     </div>
   )
 }
@@ -515,20 +756,7 @@ export default function OperatorConsolePage() {
         )}
 
         {oeMessage && (
-          <div className="space-y-3">
-            <div className="bg-gray-900 border border-gray-700 rounded-lg p-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-gray-300">D4G OE Message Preview</span>
-                <span className="text-xs text-green-400 flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" />
-                  Generated
-                </span>
-              </div>
-              <pre className="text-xs text-gray-300 font-mono overflow-auto max-h-56 whitespace-pre-wrap">
-                {JSON.stringify(oeMessage, null, 2)}
-              </pre>
-            </div>
-          </div>
+          <ReferencEnergyCurveView oeMessage={oeMessage} />
         )}
       </div>
 

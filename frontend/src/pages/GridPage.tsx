@@ -396,19 +396,41 @@ function InlineLVPanel({ dtNodeId }: { dtNodeId: string }) {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  const [needsBuild, setNeedsBuild] = useState(false)
+  const [buildLoading, setBuildLoading] = useState(false)
+  const [buildDone, setBuildDone] = useState(false)
   const [rebuildLoading, setRebuildLoading] = useState(false)
   const [rebuildDone, setRebuildDone] = useState(false)
   const [provider, setProvider] = useState<'overpass' | 'synthetic'>('overpass')
 
   const run = async () => {
-    setLoading(true); setError(null)
+    setLoading(true); setError(null); setNeedsBuild(false)
     try {
       const res = await api.lvNetworkPowerFlow(dtNodeId)
       setResult(res.data)
     } catch (e: any) {
-      setError(e?.response?.data?.detail || 'Power flow failed')
+      const status = e?.response?.status
+      const detail: string = e?.response?.data?.detail || ''
+      if (status === 404 && detail.toLowerCase().includes('no lv feeder')) {
+        setNeedsBuild(true)
+      } else {
+        setError(detail || 'Power flow failed')
+      }
     } finally {
       setLoading(false)
+    }
+  }
+
+  const buildNetwork = async () => {
+    setBuildLoading(true); setBuildDone(false)
+    try {
+      await api.lvNetwork(dtNodeId, 'synthetic')
+      setBuildDone(true)
+    } catch {
+      setBuildDone(true) // allow retry
+    } finally {
+      setBuildLoading(false)
+      setNeedsBuild(false)
     }
   }
 
@@ -436,6 +458,31 @@ function InlineLVPanel({ dtNodeId }: { dtNodeId: string }) {
         </button>
       </div>
 
+      {needsBuild && (
+        <div className="flex items-start gap-3 p-3 bg-amber-900/20 border border-amber-700/40 rounded-lg text-xs text-amber-300">
+          <Wind className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-semibold mb-1">No LV feeder found for this transformer</p>
+            <p className="text-amber-400/80 mb-2">The LV network has not been built yet. Build it first using synthetic topology, then run power flow.</p>
+            <button
+              onClick={buildNetwork}
+              disabled={buildLoading}
+              className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5"
+            >
+              {buildLoading ? (
+                <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5" />
+              )}
+              {buildLoading ? 'Building…' : 'Build Network First'}
+            </button>
+            {buildDone && !buildLoading && (
+              <p className="text-green-400 mt-1.5">Network built — you can now run power flow</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="flex items-start gap-2 p-3 bg-red-900/20 border border-red-700/40 rounded-lg text-xs text-red-400">
           <Wind className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
@@ -448,7 +495,7 @@ function InlineLVPanel({ dtNodeId }: { dtNodeId: string }) {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {[
               { label: 'Converged', value: result.converged ? 'Yes' : 'No', color: result.converged ? 'text-green-400' : 'text-red-400' },
-              { label: 'Buses', value: result.bus_count ?? result.bus_results?.length ?? 0, color: 'text-gray-100' },
+              { label: 'Buses', value: result.bus_count ?? result.buses?.length ?? 0, color: 'text-gray-100' },
               { label: 'Load', value: `${result.total_load_kw?.toFixed(1)} kW`, color: 'text-blue-400' },
               { label: 'Gen', value: `${result.total_gen_kw?.toFixed(1)} kW`, color: 'text-green-400' },
             ].map(({ label, value, color }) => (
@@ -458,18 +505,23 @@ function InlineLVPanel({ dtNodeId }: { dtNodeId: string }) {
               </div>
             ))}
           </div>
+          {result.total_loss_kw != null && (
+            <div className="text-xs text-gray-500">
+              Network losses: <span className="text-amber-400 font-mono">{result.total_loss_kw.toFixed(2)} kW</span>
+            </div>
+          )}
           {result.violations?.length > 0 && (
             <div className="p-3 bg-red-900/15 border border-red-700/30 rounded-lg text-xs">
               <p className="font-semibold text-red-400 mb-1">{result.violations.length} voltage violation{result.violations.length !== 1 ? 's' : ''}</p>
               {result.violations.slice(0, 5).map((v: any, i: number) => (
                 <div key={i} className="flex justify-between text-red-300 font-mono">
-                  <span>{v.bus_id}</span>
-                  <span>{v.voltage?.toFixed(4)} pu · {v.violation_type}</span>
+                  <span>{v.id}</span>
+                  <span>{v.v_pu?.toFixed(4)} pu · {v.voltage_status}</span>
                 </div>
               ))}
             </div>
           )}
-          {result.bus_results?.length > 0 && (
+          {result.buses?.length > 0 && (
             <div className="overflow-x-auto rounded-lg border border-gray-700">
               <table className="w-full text-xs">
                 <thead>
@@ -482,17 +534,17 @@ function InlineLVPanel({ dtNodeId }: { dtNodeId: string }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {result.bus_results.map((bus: any, i: number) => {
+                  {result.buses.map((bus: any, i: number) => {
                     const vPu = bus.v_pu
                     const color = vPu > 1.05 || vPu < 0.95 ? 'text-red-400' : vPu > 1.02 || vPu < 0.98 ? 'text-amber-400' : 'text-green-400'
-                    const status = vPu > 1.05 || vPu < 0.95 ? 'VIOLATION' : vPu > 1.02 || vPu < 0.98 ? 'WARNING' : 'NORMAL'
+                    const status = bus.voltage_status ?? (vPu > 1.05 || vPu < 0.95 ? 'VIOLATION' : vPu > 1.02 || vPu < 0.98 ? 'WARNING' : 'NORMAL')
                     return (
                       <tr key={i} className="table-row">
-                        <td className="table-cell py-1.5 px-3 font-mono text-indigo-300">{bus.bus_ref || bus.bus_name || `Bus ${i+1}`}</td>
+                        <td className="table-cell py-1.5 px-3 font-mono text-indigo-300">{bus.bus_ref || `Bus ${i+1}`}</td>
                         <td className={`table-cell py-1.5 px-3 text-right font-mono ${color}`}>{vPu.toFixed(4)}</td>
-                        <td className="table-cell py-1.5 px-3 text-right font-mono text-gray-300">{bus.v_v?.toFixed(1)}</td>
+                        <td className="table-cell py-1.5 px-3 text-right font-mono text-gray-300">{bus.v_v?.toFixed(1) ?? '—'}</td>
                         <td className="table-cell py-1.5 px-3">
-                          <span className={`text-[10px] font-bold ${status === 'VIOLATION' ? 'text-red-400' : status === 'WARNING' ? 'text-amber-400' : 'text-green-400'}`}>{status}</span>
+                          <span className={`text-[10px] font-bold ${status === 'OVERVOLTAGE' || status === 'UNDERVOLTAGE' || status === 'VIOLATION' ? 'text-red-400' : status === 'WARNING' ? 'text-amber-400' : 'text-green-400'}`}>{status}</span>
                         </td>
                         <td className="table-cell py-1.5 px-3 text-gray-500 font-mono" style={{ fontSize: 10 }}>{bus.asset_linked || '—'}</td>
                       </tr>
@@ -505,7 +557,7 @@ function InlineLVPanel({ dtNodeId }: { dtNodeId: string }) {
         </div>
       )}
 
-      {!result && !loading && !error && (
+      {!result && !loading && !error && !needsBuild && (
         <div className="text-center text-gray-600 text-xs py-5 border border-dashed border-gray-700 rounded-lg">
           Click "Run Power Flow" to analyse the LV network for this transformer
         </div>
