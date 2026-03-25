@@ -35,7 +35,7 @@ import LoadingSpinner from '../components/ui/LoadingSpinner'
 import type { DERAsset, DERAssetLive, GridNode, TelemetryPoint } from '../types'
 import type { LVNetworkGeoJSON, LVBusPoint } from '../components/ui/GISMap'
 
-type Tab = 'gis' | 'assets' | 'hosting' | 'nodes'
+type Tab = 'gis' | 'assets' | 'lv' | 'hosting' | 'nodes'
 
 const ASSET_TYPES = ['ALL', 'BATTERY', 'SOLAR_PV', 'WIND', 'EV_CHARGER', 'HEAT_PUMP', 'FLEXIBLE_LOAD']
 const ASSET_STATUSES = ['ALL', 'ONLINE', 'OFFLINE', 'CURTAILED', 'WARNING']
@@ -184,6 +184,350 @@ interface RegisterAssetForm {
   dt_id: string
   comm_capability: string
   counterparty_id: string
+}
+
+// ─── LV Network & DERs tab ───────────────────────────────────────────────────
+
+interface LVNetworkTabProps {
+  nodes: GridNode[]
+  assets: DERAsset[]
+  liveAssets: DERAssetLive[]
+  selectedDT: { nodeId: string; name: string } | null
+  onSelectDT: (nodeId: string) => void
+  onCloseDT: () => void
+}
+
+function LVNetworkTab({ nodes, assets, liveAssets, selectedDT, onSelectDT, onCloseDT }: LVNetworkTabProps) {
+  const dtNodes = nodes.filter((n) => n.node_type === 'DISTRIBUTION_TRANSFORMER')
+  const feederNodes = nodes.filter((n) => n.node_type === 'FEEDER')
+
+  // DERs connected to the selected DT
+  const connectedAssets = selectedDT
+    ? assets.filter((a) => a.dt_id === selectedDT.nodeId || a.feeder_id === selectedDT.nodeId)
+    : []
+
+  // Live data for those assets
+  const connectedLive = connectedAssets.map((a) => {
+    const live = liveAssets.find((l) => l.id === a.id)
+    return { ...a, current_kw: live?.current_kw ?? a.current_kw }
+  })
+
+  const totalGenKw = connectedLive.filter((a) => (a.current_kw ?? 0) < 0).reduce((s, a) => s + Math.abs(a.current_kw ?? 0), 0)
+  const totalLoadKw = connectedLive.filter((a) => (a.current_kw ?? 0) >= 0).reduce((s, a) => s + (a.current_kw ?? 0), 0)
+
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+      {/* Left: DT selector */}
+      <div className="card space-y-4">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-200 mb-3">Distribution Transformers</h2>
+          {dtNodes.length === 0 ? (
+            <div className="text-xs text-gray-500 text-center py-8">No DT nodes available</div>
+          ) : (
+            <div className="space-y-1.5 max-h-[480px] overflow-y-auto pr-1">
+              {dtNodes.map((dt) => {
+                const dtAssets = assets.filter((a) => a.dt_id === dt.node_id || a.feeder_id === dt.node_id)
+                const isSelected = selectedDT?.nodeId === dt.node_id
+                const loadPct = dt.current_loading_pct ?? 0
+                return (
+                  <button
+                    key={dt.node_id}
+                    onClick={() => isSelected ? onCloseDT() : onSelectDT(dt.node_id)}
+                    className={`w-full text-left p-3 rounded-lg border transition-all ${
+                      isSelected
+                        ? 'bg-indigo-900/30 border-indigo-600/60'
+                        : 'bg-gray-800/50 border-gray-700/50 hover:border-gray-600'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-semibold text-gray-200 truncate">{dt.name}</span>
+                      <span className={`text-xs font-bold ml-2 ${
+                        loadPct > 90 ? 'text-red-400' : loadPct > 75 ? 'text-amber-400' : 'text-green-400'
+                      }`}>{loadPct.toFixed(0)}%</span>
+                    </div>
+                    <div className="h-1 bg-gray-700 rounded-full overflow-hidden mb-2">
+                      <div
+                        className={`h-full rounded-full ${loadPct > 90 ? 'bg-red-500' : loadPct > 75 ? 'bg-amber-500' : 'bg-green-500'}`}
+                        style={{ width: `${Math.min(loadPct, 100)}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                      <span className="font-mono">{dt.node_id}</span>
+                      <span>·</span>
+                      <span>{dtAssets.length} DER{dtAssets.length !== 1 ? 's' : ''}</span>
+                      {dt.voltage_l1_v && <><span>·</span><span>{dt.voltage_l1_v.toFixed(1)} V</span></>}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {feederNodes.length > 0 && (
+          <div>
+            <h2 className="text-sm font-semibold text-gray-200 mb-2">Feeders</h2>
+            <div className="space-y-1">
+              {feederNodes.map((f) => (
+                <div key={f.node_id} className="flex items-center justify-between text-xs p-2 bg-gray-800/40 rounded-lg">
+                  <span className="text-gray-300 truncate">{f.name}</span>
+                  <span className={`font-mono font-bold ml-2 ${
+                    (f.current_loading_pct ?? 0) > 90 ? 'text-red-400' :
+                    (f.current_loading_pct ?? 0) > 75 ? 'text-amber-400' : 'text-green-400'
+                  }`}>{f.current_loading_pct?.toFixed(0) ?? '—'}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Right: DER visibility + LV panel */}
+      <div className="xl:col-span-2 space-y-4">
+        {!selectedDT ? (
+          <div className="card flex flex-col items-center justify-center h-64 text-center gap-3">
+            <div className="w-12 h-12 bg-indigo-900/30 rounded-xl flex items-center justify-center">
+              <Zap className="w-6 h-6 text-indigo-400" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-300">Select a Distribution Transformer</p>
+              <p className="text-xs text-gray-500 mt-1">Choose a DT from the list to see connected DERs and run LV power flow</p>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* DT summary + connected DERs */}
+            <div className="card">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-200">{selectedDT.name}</h3>
+                  <p className="text-xs font-mono text-indigo-400 mt-0.5">{selectedDT.nodeId}</p>
+                </div>
+                <button onClick={onCloseDT} className="text-gray-500 hover:text-gray-300">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Power summary */}
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <div className="bg-gray-800 rounded-lg p-2.5">
+                  <div className="text-xs text-gray-500 mb-1">Connected DERs</div>
+                  <div className="text-lg font-bold text-gray-100">{connectedAssets.length}</div>
+                </div>
+                <div className="bg-green-900/20 border border-green-800/30 rounded-lg p-2.5">
+                  <div className="text-xs text-gray-500 mb-1">Generation</div>
+                  <div className="text-lg font-bold text-green-400">{totalGenKw.toFixed(1)} <span className="text-xs text-gray-500">kW</span></div>
+                </div>
+                <div className="bg-blue-900/20 border border-blue-800/30 rounded-lg p-2.5">
+                  <div className="text-xs text-gray-500 mb-1">Load</div>
+                  <div className="text-lg font-bold text-blue-400">{totalLoadKw.toFixed(1)} <span className="text-xs text-gray-500">kW</span></div>
+                </div>
+              </div>
+
+              {/* Connected DER table */}
+              {connectedAssets.length === 0 ? (
+                <div className="text-center text-gray-500 text-xs py-6 border border-dashed border-gray-700 rounded-lg">
+                  No DER assets registered behind this DT
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-gray-700">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-gray-800/60">
+                        <th className="table-header text-left py-2 px-3">Asset Ref</th>
+                        <th className="table-header text-left py-2 px-3">Name</th>
+                        <th className="table-header text-left py-2 px-3">Type</th>
+                        <th className="table-header text-left py-2 px-3">Status</th>
+                        <th className="table-header text-right py-2 px-3">Current kW</th>
+                        <th className="table-header text-right py-2 px-3">Capacity kW</th>
+                        <th className="table-header text-right py-2 px-3">DOE Export kW</th>
+                        <th className="table-header text-right py-2 px-3">SoC %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {connectedLive.map((asset) => {
+                        const isGen = (asset.current_kw ?? 0) < 0
+                        return (
+                          <tr key={asset.id} className="table-row">
+                            <td className="table-cell py-2 px-3 font-mono text-indigo-400">{asset.asset_ref}</td>
+                            <td className="table-cell py-2 px-3 text-gray-200 font-medium">{asset.name}</td>
+                            <td className="table-cell py-2 px-3 text-gray-400">{asset.type?.replace(/_/g, ' ')}</td>
+                            <td className="table-cell py-2 px-3">
+                              <StatusBadge status={asset.status} />
+                            </td>
+                            <td className={`table-cell py-2 px-3 text-right font-mono font-bold ${isGen ? 'text-green-400' : 'text-blue-400'}`}>
+                              {isGen ? '−' : '+'}{Math.abs(asset.current_kw ?? 0).toFixed(1)}
+                            </td>
+                            <td className="table-cell py-2 px-3 text-right font-mono text-gray-400">{asset.capacity_kw?.toFixed(0)}</td>
+                            <td className="table-cell py-2 px-3 text-right font-mono text-gray-400">
+                              {asset.doe_export_max_kw != null ? asset.doe_export_max_kw.toFixed(0) : '—'}
+                            </td>
+                            <td className="table-cell py-2 px-3 text-right">
+                              {asset.current_soc_pct != null ? (
+                                <div className="flex items-center justify-end gap-1">
+                                  <div className="w-10 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                                    <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${asset.current_soc_pct}%` }} />
+                                  </div>
+                                  <span className="text-gray-400">{asset.current_soc_pct.toFixed(0)}%</span>
+                                </div>
+                              ) : <span className="text-gray-600">—</span>}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Inline LV power flow panel */}
+            <InlineLVPanel dtNodeId={selectedDT.nodeId} />
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Inline LV power flow (no floating panel, sits in page flow) ──────────────
+
+function InlineLVPanel({ dtNodeId }: { dtNodeId: string }) {
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [rebuildLoading, setRebuildLoading] = useState(false)
+  const [rebuildDone, setRebuildDone] = useState(false)
+  const [provider, setProvider] = useState<'overpass' | 'synthetic'>('overpass')
+
+  const run = async () => {
+    setLoading(true); setError(null)
+    try {
+      const res = await api.lvNetworkPowerFlow(dtNodeId)
+      setResult(res.data)
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Power flow failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const rebuild = async () => {
+    setRebuildLoading(true); setRebuildDone(false)
+    try { await api.lvNetworkRebuild(dtNodeId, provider) } catch { /* ok */ }
+    setRebuildDone(true); setRebuildLoading(false)
+  }
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-gray-200">LV Power Flow</h3>
+        <button
+          onClick={run}
+          disabled={loading}
+          className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-60"
+        >
+          {loading ? (
+            <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+          ) : (
+            <Zap className="w-3.5 h-3.5" />
+          )}
+          {loading ? 'Running…' : 'Run Power Flow'}
+        </button>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 p-3 bg-red-900/20 border border-red-700/40 rounded-lg text-xs text-red-400">
+          <Wind className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          {error}
+        </div>
+      )}
+
+      {result && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {[
+              { label: 'Converged', value: result.converged ? 'Yes' : 'No', color: result.converged ? 'text-green-400' : 'text-red-400' },
+              { label: 'Buses', value: result.bus_count ?? result.bus_results?.length ?? 0, color: 'text-gray-100' },
+              { label: 'Load', value: `${result.total_load_kw?.toFixed(1)} kW`, color: 'text-blue-400' },
+              { label: 'Gen', value: `${result.total_gen_kw?.toFixed(1)} kW`, color: 'text-green-400' },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="bg-gray-800 rounded-lg p-2.5">
+                <div className="text-xs text-gray-500 mb-1">{label}</div>
+                <div className={`text-sm font-bold ${color}`}>{value}</div>
+              </div>
+            ))}
+          </div>
+          {result.violations?.length > 0 && (
+            <div className="p-3 bg-red-900/15 border border-red-700/30 rounded-lg text-xs">
+              <p className="font-semibold text-red-400 mb-1">{result.violations.length} voltage violation{result.violations.length !== 1 ? 's' : ''}</p>
+              {result.violations.slice(0, 5).map((v: any, i: number) => (
+                <div key={i} className="flex justify-between text-red-300 font-mono">
+                  <span>{v.bus_id}</span>
+                  <span>{v.voltage?.toFixed(4)} pu · {v.violation_type}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {result.bus_results?.length > 0 && (
+            <div className="overflow-x-auto rounded-lg border border-gray-700">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-gray-800/60">
+                    <th className="table-header text-left py-2 px-3">Bus</th>
+                    <th className="table-header text-right py-2 px-3">V (pu)</th>
+                    <th className="table-header text-right py-2 px-3">V (V)</th>
+                    <th className="table-header text-left py-2 px-3">Status</th>
+                    <th className="table-header text-left py-2 px-3">Asset</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.bus_results.map((bus: any, i: number) => {
+                    const vPu = bus.v_pu
+                    const color = vPu > 1.05 || vPu < 0.95 ? 'text-red-400' : vPu > 1.02 || vPu < 0.98 ? 'text-amber-400' : 'text-green-400'
+                    const status = vPu > 1.05 || vPu < 0.95 ? 'VIOLATION' : vPu > 1.02 || vPu < 0.98 ? 'WARNING' : 'NORMAL'
+                    return (
+                      <tr key={i} className="table-row">
+                        <td className="table-cell py-1.5 px-3 font-mono text-indigo-300">{bus.bus_ref || bus.bus_name || `Bus ${i+1}`}</td>
+                        <td className={`table-cell py-1.5 px-3 text-right font-mono ${color}`}>{vPu.toFixed(4)}</td>
+                        <td className="table-cell py-1.5 px-3 text-right font-mono text-gray-300">{bus.v_v?.toFixed(1)}</td>
+                        <td className="table-cell py-1.5 px-3">
+                          <span className={`text-[10px] font-bold ${status === 'VIOLATION' ? 'text-red-400' : status === 'WARNING' ? 'text-amber-400' : 'text-green-400'}`}>{status}</span>
+                        </td>
+                        <td className="table-cell py-1.5 px-3 text-gray-500 font-mono" style={{ fontSize: 10 }}>{bus.asset_linked || '—'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!result && !loading && !error && (
+        <div className="text-center text-gray-600 text-xs py-5 border border-dashed border-gray-700 rounded-lg">
+          Click "Run Power Flow" to analyse the LV network for this transformer
+        </div>
+      )}
+
+      {/* Rebuild section */}
+      <div className="border-t border-gray-700 pt-4">
+        <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Rebuild Network Topology</p>
+        <div className="flex items-center gap-2">
+          <select value={provider} onChange={(e) => setProvider(e.target.value as any)} className="select text-xs flex-1" disabled={rebuildLoading}>
+            <option value="overpass">OpenStreetMap (Overpass)</option>
+            <option value="synthetic">Synthetic</option>
+          </select>
+          <button onClick={rebuild} disabled={rebuildLoading} className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5">
+            {rebuildLoading ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Rebuild
+          </button>
+        </div>
+        {rebuildDone && !rebuildLoading && <p className="text-xs text-green-400 mt-1.5">Network rebuild requested successfully</p>}
+      </div>
+    </div>
+  )
 }
 
 export default function GridPage() {
@@ -369,13 +713,13 @@ export default function GridPage() {
 
       {/* Tabs */}
       <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1 w-fit">
-        {(['gis', 'assets', 'hosting', 'nodes'] as Tab[]).map((tab) => (
+        {(['gis', 'assets', 'lv', 'hosting', 'nodes'] as Tab[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={activeTab === tab ? 'tab-active' : 'tab-inactive'}
           >
-            {tab === 'gis' ? 'GIS View' : tab === 'assets' ? 'Asset Fleet' : tab === 'hosting' ? 'Hosting Capacity' : 'Grid Nodes'}
+            {tab === 'gis' ? 'GIS View' : tab === 'assets' ? 'Asset Fleet' : tab === 'lv' ? 'LV Network & DERs' : tab === 'hosting' ? 'Hosting Capacity' : 'Grid Nodes'}
           </button>
         ))}
       </div>
@@ -568,6 +912,18 @@ export default function GridPage() {
                 Showing {filteredAssets.length} of {assets.length} assets
               </div>
             </div>
+          )}
+
+          {/* LV Network & DERs */}
+          {activeTab === 'lv' && (
+            <LVNetworkTab
+              nodes={nodes}
+              assets={assets}
+              liveAssets={liveAssets}
+              selectedDT={selectedDT}
+              onSelectDT={handleSelectDT}
+              onCloseDT={() => setSelectedDT(null)}
+            />
           )}
 
           {/* Hosting Capacity */}
